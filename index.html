@@ -15,7 +15,7 @@
   <link rel="stylesheet" href="styles.css">
   <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
   <script defer src="app.js"></script>
-  <title>Berry Creek GPS | Prototype</title>
+  <title>Berry Creek GPS | v0.2.0</title>
 </head>
 <body>
   <div id="app">
@@ -28,10 +28,13 @@
       <section class="map-shell" id="mapShell" aria-label="Golf course GPS map">
         <div id="map" aria-label="Interactive satellite course map"></div>
         <div id="mapUnavailable" class="map-unavailable" hidden><strong>Satellite map unavailable</strong><span>Connect to the internet to load the mapping library and imagery. Scoring still works.</span></div>
-        <div class="map-toolbar top-left"><button id="locateBtn" class="map-action">⌖ <span>My Location</span></button><button id="courseBtn" class="map-action">◎ <span>Clubhouse</span></button><button id="layerBtn" class="map-action">▧ <span>Satellite</span></button></div>
+        <div class="map-toolbar top-left"><button id="locateBtn" class="map-action">⌖ <span>My Location</span></button><button id="courseBtn" class="map-action">◎ <span>Clubhouse</span></button><button id="layerBtn" class="map-action" title="Switch between satellite and street base maps">▧ <span>Satellite</span></button><button id="animatedBtn" class="map-action animated-action" type="button" aria-pressed="false" title="Switch to illustrated hole shapes over a map">✦ <span>Course Art</span></button></div>
         <div class="map-toolbar top-right"><button id="expandBtn" class="map-action strong">⛶ <span>Full Map</span></button></div>
-        <div class="map-toolbar lower-left"><button id="measureBtn" class="map-action">↗ <span>Measure</span></button><button id="markBtn" class="map-action">⚑ <span>Mark Green</span></button><button id="testBtn" class="map-action muted">◇ <span>Test Point</span></button></div>
+        <div class="map-toolbar lower-left"><button id="measureBtn" class="map-action">↗ <span>Measure</span></button><button id="markBtn" class="map-action">⚑ <span>Mark Green</span></button><button id="drawBtn" class="map-action">✎ <span>Draw Hole</span></button><button id="testBtn" class="map-action muted">◇ <span>Test Point</span></button></div>
         <div class="map-top-note" id="mapInstruction">Satellite course view • enable GPS for distances</div>
+        <div class="course-art-status" id="courseArtStatus" hidden></div>
+        <div class="course-art-legend" id="courseArtLegend" hidden><span><i class="swatch swatch-fairway"></i>Fairway</span><span><i class="swatch swatch-green"></i>Green</span><span><i class="swatch swatch-bunker"></i>Sand</span><span><i class="swatch swatch-water"></i>Water</span></div>
+        <div class="draw-actions" id="drawActions" hidden><strong id="drawStatus">Tap course outline corners</strong><button type="button" id="undoVertex">↶ Undo</button><button type="button" class="done" id="finishShape">✓ Save Shape</button><button type="button" id="cancelShape">Cancel</button></div>
         <div class="measure-readout" id="measureReadout" hidden>Tap a map target to measure</div>
         <div class="yardage-card">
           <div class="yardage-head"><span>HOLE <strong id="yardHole">1</strong></span><span id="teeYards">GOLD · 373 YDS</span></div>
@@ -42,7 +45,7 @@
           </div>
           <div class="yardage-foot" id="yardageFoot">Mark green points to enable GPS yardages</div>
         </div>
-        <div class="map-credit">Map imagery © Esri and imagery providers · experimental course markers</div>
+        <div class="map-credit" id="mapCredit">Map tiles © credited providers · experimental course markers</div>
       </section>
       <aside class="scoring-panel" id="scorePanel">
         <div class="panel-head"><div><span class="eyebrow">CURRENT ROUND</span><h1>Scorecard</h1></div><select id="teeSelect" aria-label="Tee selection"><option value="gold">Gold / 1</option><option value="blue">Blue / 2</option><option value="combo">Combo / 23</option><option value="white">White / 3</option></select></div>
@@ -51,7 +54,7 @@
         <div class="score-bottom"><div class="totals-bar"><div><small>ROUND PAR</small><strong id="parToHole">4</strong></div><div><small>RECORDED</small><strong id="holesCount">0 / 18</strong></div><div><small>PLAYERS</small><strong id="playersCount">2</strong></div></div><button class="primary-next" id="nextHoleBottom">NEXT HOLE <span>→</span></button><div class="secondary-actions"><button id="fullCardBtn">▦ Full Scorecard</button><button id="centerBtn">⌖ Recenter Map</button></div></div>
       </aside>
     </main>
-    <footer class="app-footer"><span><span class="tiny-dot"></span> Auto-saved on this device</span><span id="footerHint">GPS yardages are only available after green points have been mapped.</span><span>V0.1 • SEPARATE FROM DH GAME</span></footer>
+    <footer class="app-footer"><span><span class="tiny-dot"></span> Auto-saved on this device</span><span id="footerHint">GPS yardages are only available after green points have been mapped.</span><span>V0.2.0 • SEPARATE FROM DH GAME</span></footer>
   </div>
 
   <div class="modal-backdrop" id="modalBackdrop" hidden><section class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle"><header class="modal-title"><h2 id="modalTitle">Options</h2><button id="closeModal" aria-label="Close">×</button></header><div class="modal-content" id="modalContent"></div></section></div>

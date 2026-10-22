@@ -1,55 +1,29 @@
-# Berry Creek GPS — iPad Landscape Prototype v0.1
+# Berry Creek GPS v0.2.0 — Illustrated Course Map for iPad
 
-A **separate** proof-of-concept from the Berry Creek DH Game. This package does not call, access, or modify the DH Game's database, source, or hosting.
+**Entirely separate from the Berry Creek DH Game.** Deploy to the existing Berry Creek GPS repository/service only. Do not upload files to the DH Game repository.
 
-## What works
+## New: Course Art toggle, real golf hole shapes
 
-- iPad-first 2-panel landscape user interface and full-map toggle.
-- Live satellite map of The Club at Berry Creek (initial clubhouse reference point, not a mapped hole).
-- Streets/satellite toggle, pan and zoom, recenter on clubhouse or your reported GPS position.
-- Live device geolocation (after permission) and accuracy readout; geolocation is available only on a secure HTTPS or localhost origin. Cellular-equipped iPads with GNSS generally give better on-course positioning; a Wi-Fi-only iPad can have less precise location.
-- Mark FRONT, CENTER and BACK of each hole's green by tapping the map. Mapping starts intentionally blank: precise green coordinates have **not** been independently verified. Use a survey or verified green coordinates before depending on the distance readings.
-- Yardages in yards from your actual reported position to each saved mapped green point; tap-to-measure targets.
-- Yellow TEST POINT mode for off-course demonstration; never presented as real GPS.
-- Current round scoring for up to five players, 18 holes, gross totals, to-par totals, and 18-hole scorecard.
-- Save and revisit local round history. CSV score export. Export/import mapped green coordinates as JSON.
-- Browser device storage for rounds, scores, and mappings; local app-shell cache via service worker.
+Tap **Course Art** on the map toolbar to switch from satellite imagery to an illustrated map with green fairways, bright greens, tan bunkers, and blue water. Shapes are geographic overlays, so GPS markers, scoring, and measurements stay aligned.
 
-## Important limitations in v0.1
+- On first use, the app *attempts* to retrieve mapped golf course outlines from **OpenStreetMap's Overpass API**. Available data vary and require an internet connection; there is no guarantee that all holes/features are mapped. OSM data are licensed ODbL; attribute OpenStreetMap and follow applicable use terms.
+- If the illustrated map is missing a fairway or bunker, use **Draw Hole**. Choose a feature type, then tap its corners **on the satellite image**, press Save Shape. Return to Course Art to view the traced feature. **No invented hole shapes are bundled.**
+- You can draw fairways, greens, bunkers, water, tee boxes, and rough for each hole. Each shape is saved to this iPad's browser storage. Use Draw Hole → **Export Drawings JSON** to back up and share between iPads. **Import Drawings JSON** replaces the current local custom drawings. This differs from the existing Round Menu → Export/Import Green Points JSON, which holds actual front/center/back distance reference points.
+- The selected hole's custom drawings are shown over the community geometry. Course Art includes a legend and displays number of custom outlines for the hole. On initial use with incomplete mapped outlines, you may only see the topographic base map; map the silhouettes by tracing.
+- Marker animations and moving distance guides carry over from v0.1.2.
 
-1. **This is a development prototype, not yet a calibrated golf GPS product.** The green coordinates are intentionally blank. There is no source-verified front/center/back database yet. Do not interpret course-card tee distances as live GPS distances.
-2. Maps and Leaflet library initially require network access. Service worker caches the local app shell, **not guaranteed offline satellite imagery**. Score data is saved to this device only (no login, cloud sync, GHIN, or DH Game connectivity).
-3. Apple Home Screen web apps provide an app-like standalone experience, but can still display some iPadOS system bars and cannot always lock physical device orientation. Rotate the iPad to landscape and preferably use it outside Stage Manager / Split View.
-4. Base imagery uses Esri World Imagery public tile endpoint with visible attribution. Review imagery licensing, tile usage, API keys/provider pricing, and offline storage rights before deploying to a larger group.
-5. Scorecard yardages/handicap ranks were transcribed from public listings and have known inconsistencies across websites/tee revisions. Validate against a current Berry Creek physical scorecard. **Combo/23 yardages intentionally display as unavailable.**
-6. To preserve data during testing, use the Round Menu to export your scores and green-point JSON. Clearing Safari site data or switching browsers can erase local storage.
+## Installation on Render
 
-## Open in an iPad
+Recommended: an independent Render **Static Site** pointed at a GitHub repo whose root contains `index.html`, `app.js`, `styles.css`, `icon.svg`, `sw.js`, `manifest.webmanifest` etc. Use build command `echo "Static files ready"` and publish directory `.`. Existing **Web Service** deployments continue to work with `node server.js` since `server.js` and `package.json` are included.
 
-1. Put the included files in a **separate HTTPS static website** (e.g., separate GitHub repository with GitHub Pages, or new Render static site). Do not deploy these over the DH Game's existing files.
-2. On the iPad, open the HTTPS address in Safari and rotate it into landscape.
-3. Tap **Share → Add to Home Screen**, enable **Open as Web App**, then open the resulting icon. Safari's address and tab bars should be removed from the app display.
-4. Tap **Players** and edit player names, then use +, – or the center score to record each golfer's score. Use Hole < and > or Next Hole to navigate.
-5. Tap **My Location** to grant access to GPS. If not physically on the course, choose **Test Point** and tap a map location for a simulated testing origin.
-6. Tap **Mark Green → Set CENTER / FRONT / BACK**, then tap a precise map coordinate to map the currently selected hole. A saved mapped hole shows GPS distances if a GPS or test position exists.
-7. Tap **Full Map** for a map-dominant view; **Show Scores** to return to scoring.
+For an existing Berry Creek GPS Render deployment, extract this ZIP, replace the app files in the Berry Creek GPS GitHub repo root, commit, and redeploy. Open from iPad Home Screen in landscape after update. Because a service worker caches the shell, do a reload if seeing the old button.
 
-### Quick static-server test on a computer
+## Important limitations
 
-Run `python3 -m http.server 8000` from this directory, then open `http://localhost:8000` in a browser. Your device may not receive live GPS position when you're remote from Berry Creek; use Test Point for demo only.
+This is **not yet a verified, course-wide Garmin-equivalent map**. Actual outlines depend on community map features and manually traced geometry. Unmapped hazards are not shown and should not be assumed absent. Front/center/back green positions still must be calibrated for GPS yardages. **Do not use unverified coordinates or map measurements to make safety decisions near water or hazards.** Traced outlines and OpenStreetMap data are not survey grade. A source-verified proprietary aerial layout is not included.
 
-## Source data for working scorecard
+Live maps and the Leaflet mapping library require internet connectivity (unless you separately license and implement offline tiles). A GPS-equipped iPad and location permission are recommended; iPads with Wi‑Fi-only location may be inaccurate. Existing scorekeeper data remain local on this iPad and are not synced to other users. Back up rounds and drawings before clearing browser data.
 
-- Course official page: https://www.theclubatberrycreek.com/golf
-- Gold tee yardages, par and stroke indexes: https://18birdies.com/golf-courses/club/8b620030-86ac-11e4-8c28-020000005b00/berry-creek-country-club
-- Other tee lengths: https://www.freegolftracker.com/courses/Berry-Creek-Country-Club_12376.htm
-- Clubhouse approximate location: 30.706445, -97.670818 from a public business directory (not survey-grade).
-- Apple install guidance: https://support.apple.com/guide/ipad/open-as-web-app-ipad8f1f7a29/ipados
+Map sources: OpenStreetMap contributors (Open Database License), Esri (satellite/topographic imagery; provider-specific terms), The Club at Berry Creek's public course information (https://www.theclubatberrycreek.com/golf).
 
-## Suggested next development phase
-
-1. Map the 18 greens with validated front, center, and back coordinates; add tee zones and the navigable hole centerlines.
-2. Show hole-focused fly-to view and carries to hazards and layups; improve GPS accuracy and test GNSS hardware in an actual cart.
-3. Add selectable per-player tees, strokes/handicaps, hole pops, stableford/net scoring if desired.
-4. Add real account logins, shared rounds, live multi-device sync, server backups, and an admin coordinate editor in a **separate** repository/server.
-5. Review map imagery licensing, offline cache strategy, and iPad kiosk/fullscreen behaviors.
+See `RENDER_DEPLOYMENT.md` for Render details.

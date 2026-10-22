@@ -1,6 +1,6 @@
-# Berry Creek GPS — Render deployment fix (v0.1.1)
+# Berry Creek GPS — Render deployment guide (v0.2.0)
 
-The earlier ZIP held only static files and did not include `server.js`.
+The original prototype ZIP held only static files and did not include `server.js`.
 If Render showed `Cannot find module '/opt/render/project/src/server.js'`, the service was likely configured as a Node Web Service.
 
 ## Recommended: a fresh Render Static Site
@@ -32,3 +32,7 @@ If you put the files inside a folder instead, set Root Directory to that folder 
 - A valid HTTPS URL is needed for real iPad geolocation permissions.
 - Internet access is required for initial maps, and GPS distance labels remain blank until the green coordinates are mapped.
 - Scoring and course points are locally saved in the browser in this development version.
+
+## Map-style update v0.2.0
+
+Copy ALL of the v0.2.0 files into the existing, separate Berry Creek GPS GitHub repository (overwrite old versions). Redeploy the GPS service only. The service worker cache has been versioned so the new JavaScript and CSS replace the previous offline shell. Scorecards, green mappings, and saved rounds remain in the same browser localStorage keys. Map style is saved separately as `bc-gps-map-style-v1`.

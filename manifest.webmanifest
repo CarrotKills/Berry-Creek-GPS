@@ -1,7 +1,7 @@
 {
   "name": "Berry Creek GPS Prototype",
   "short_name": "Berry Creek GPS",
-  "description": "iPad-first satellite map and digital golf scorecard",
+  "description": "iPad golf GPS, illustrated hole outlines and scorecard",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
