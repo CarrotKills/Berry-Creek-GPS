@@ -1,0 +1,7 @@
+# Optional Render Blueprint: creates a Static Site, which is the recommended deployment.
+services:
+  - type: web
+    name: berry-creek-gps
+    runtime: static
+    buildCommand: echo "Static files ready"
+    staticPublishPath: .

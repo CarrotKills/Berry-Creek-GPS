@@ -1,0 +1,9 @@
+{
+  "name": "berry-creek-gps",
+  "version": "0.1.1",
+  "private": true,
+  "description": "Berry Creek GPS iPad static prototype (with optional Render Web Service fallback)",
+  "scripts": {
+    "start": "node server.js"
+  }
+}
