@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+  <meta name="theme-color" content="#911a23">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Berry Creek GPS">
+  <meta name="description" content="A separate, iPad-first Berry Creek GPS course map and golf scorecard prototype.">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" onerror="window.__leafletCssFail=true">
+  <link rel="stylesheet" href="styles.css">
+  <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script defer src="app.js"></script>
+  <title>Berry Creek GPS | Prototype</title>
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="brand"><span class="brand-logo">BC</span><span class="brand-text">BERRY CREEK <strong>GPS</strong><small>iPad COURSE COMPANION · PROTOTYPE</small></span></div>
+      <div class="hole-switcher" aria-label="Hole navigation"><button id="prevHole" class="nav-btn" aria-label="Previous hole">‹</button><span id="holeLabel">HOLE 1 <b>•</b> PAR 4 <b>•</b> HCP 11</span><button id="nextHole" class="nav-btn" aria-label="Next hole">›</button></div>
+      <div class="header-actions"><span id="gpsStatus" class="status-pill">● GPS OFF</span><button class="header-btn" id="setupBtn">Players</button><button class="header-btn red" id="roundBtn">Round Menu</button></div>
+    </header>
+    <main class="workspace">
+      <section class="map-shell" id="mapShell" aria-label="Golf course GPS map">
+        <div id="map" aria-label="Interactive satellite course map"></div>
+        <div id="mapUnavailable" class="map-unavailable" hidden><strong>Satellite map unavailable</strong><span>Connect to the internet to load the mapping library and imagery. Scoring still works.</span></div>
+        <div class="map-toolbar top-left"><button id="locateBtn" class="map-action">⌖ <span>My Location</span></button><button id="courseBtn" class="map-action">◎ <span>Clubhouse</span></button><button id="layerBtn" class="map-action">▧ <span>Satellite</span></button></div>
+        <div class="map-toolbar top-right"><button id="expandBtn" class="map-action strong">⛶ <span>Full Map</span></button></div>
+        <div class="map-toolbar lower-left"><button id="measureBtn" class="map-action">↗ <span>Measure</span></button><button id="markBtn" class="map-action">⚑ <span>Mark Green</span></button><button id="testBtn" class="map-action muted">◇ <span>Test Point</span></button></div>
+        <div class="map-top-note" id="mapInstruction">Satellite course view • enable GPS for distances</div>
+        <div class="measure-readout" id="measureReadout" hidden>Tap a map target to measure</div>
+        <div class="yardage-card">
+          <div class="yardage-head"><span>HOLE <strong id="yardHole">1</strong></span><span id="teeYards">GOLD · 373 YDS</span></div>
+          <div class="yardage-cols">
+            <div><label>FRONT</label><strong id="yardFront">—</strong></div>
+            <div class="primary-distance"><label>CENTER</label><strong id="yardCenter">—</strong></div>
+            <div><label>BACK</label><strong id="yardBack">—</strong></div>
+          </div>
+          <div class="yardage-foot" id="yardageFoot">Mark green points to enable GPS yardages</div>
+        </div>
+        <div class="map-credit">Map imagery © Esri and imagery providers · experimental course markers</div>
+      </section>
+      <aside class="scoring-panel" id="scorePanel">
+        <div class="panel-head"><div><span class="eyebrow">CURRENT ROUND</span><h1>Scorecard</h1></div><select id="teeSelect" aria-label="Tee selection"><option value="gold">Gold / 1</option><option value="blue">Blue / 2</option><option value="combo">Combo / 23</option><option value="white">White / 3</option></select></div>
+        <div class="hole-detail"><div class="hole-metadata"><div><small>PAR</small><strong id="parInfo">4</strong></div><div><small>STROKE INDEX</small><strong id="hcpInfo">11</strong></div><div><small>TEE YARDS</small><strong id="teeInfo">373</strong></div></div><p id="scoreHelp">Tap + or − to enter a score. First tap starts from par.</p></div>
+        <div class="scores-wrap" id="scoreRows" aria-live="polite"></div>
+        <div class="score-bottom"><div class="totals-bar"><div><small>ROUND PAR</small><strong id="parToHole">4</strong></div><div><small>RECORDED</small><strong id="holesCount">0 / 18</strong></div><div><small>PLAYERS</small><strong id="playersCount">2</strong></div></div><button class="primary-next" id="nextHoleBottom">NEXT HOLE <span>→</span></button><div class="secondary-actions"><button id="fullCardBtn">▦ Full Scorecard</button><button id="centerBtn">⌖ Recenter Map</button></div></div>
+      </aside>
+    </main>
+    <footer class="app-footer"><span><span class="tiny-dot"></span> Auto-saved on this device</span><span id="footerHint">GPS yardages are only available after green points have been mapped.</span><span>V0.1 • SEPARATE FROM DH GAME</span></footer>
+  </div>
+
+  <div class="modal-backdrop" id="modalBackdrop" hidden><section class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle"><header class="modal-title"><h2 id="modalTitle">Options</h2><button id="closeModal" aria-label="Close">×</button></header><div class="modal-content" id="modalContent"></div></section></div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <div class="rotate-note"><div>↻</div><strong>Rotate your iPad to landscape</strong><span>This prototype is designed for a golf-cart iPad in landscape orientation.</span></div>
+</body>
+</html>

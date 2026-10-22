@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<rect width="512" height="512" rx="95" fill="#911a23"/>
+<circle cx="256" cy="236" r="178" fill="#faf7f1"/>
+<path d="M172 334V147h113q67 0 67 53 0 28-28 42 43 12 43 49 0 43-55 43H172zm62-112h52q20 0 20-15 0-16-19-16h-53zm0 69h64q19 0 19-17 0-15-21-15h-62z" fill="#911a23"/>
+<path d="M130 375h252" stroke="#911a23" stroke-width="12" stroke-linecap="round"/>
+<text x="256" y="459" text-anchor="middle" font-family="Arial,sans-serif" font-size="48" font-weight="800" fill="#fff">GPS</text>
+</svg>
