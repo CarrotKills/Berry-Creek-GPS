@@ -1,0 +1,280 @@
+const assert = require("node:assert/strict");
+const E = require("./score-engine.js");
+
+assert.equal(E.parseHandicapInput("+4.2"), -4.2);
+assert.equal(E.parseHandicapInput("12.4"), 12.4);
+assert.equal(E.parseHandicapInput("-4.2"), -4.2);
+assert.equal(E.formatHandicap(-4.2, 1), "+4.2");
+assert.equal(E.formatHandicap(12.4, 1), "12.4");
+assert.equal(E.formatHandicap(-4, 0), "+4");
+
+const settings = { par: 72, allowance: 100, kpWinners: {} };
+assert.equal(E.COURSE.holes.length, 18);
+assert.equal(E.COURSE.holes.reduce((sum, h) => sum + h.par, 0), 72);
+assert.equal(E.COURSE.tees.championship.yards.reduce((sum, y) => sum + y, 0), 6600);
+assert.equal(E.COURSE.tees.member.yards.reduce((sum, y) => sum + y, 0), 6104);
+assert.equal(E.COURSE.tees.memberCreekCombo.yards.reduce((sum, y) => sum + y, 0), 5707);
+assert.equal(E.COURSE.tees.creekMen.yards.reduce((sum, y) => sum + y, 0), 5469);
+assert.equal(E.COURSE.tees.creekBerryCombo.yards.reduce((sum, y) => sum + y, 0), 5291);
+assert.equal(E.COURSE.tees.berryMen.yards.reduce((sum, y) => sum + y, 0), 5017);
+assert.deepEqual(Object.values(E.COURSE.tees).filter((tee) => tee.selectable !== false).map((tee) => tee.name), [
+  "Championship/Gold/1",
+  "Member/Blue/2",
+  "Combo/23",
+  "Creek/White/3"
+]);
+assert.equal(E.normalizeTeeKey(E.COURSE, "creekWomen"), "creekMen");
+assert.equal(E.teeForPlayer(E.COURSE, { teeKey: "berryMen" }).name, "Creek/White/3");
+assert.deepEqual(E.holesForPlayer(E.COURSE, { teeKey: "creekMen" }).map((hole) => hole.strokeIndex), E.COURSE.strokeIndexes.upper, "Creek/White/3 uses the standard Upper hole handicap ratings");
+assert.equal(E.holesForPlayer(E.COURSE, { teeKey: "creekMen" })[12].strokeIndex, 6, "Hole 13 uses Upper handicap 6 rather than Lower handicap 3");
+const creekLow = { id: "creek-low", ghin: 0, teeKey: "creekMen", scores: Array(18).fill("") };
+const creekFive = { id: "creek-five", ghin: 5, teeKey: "creekMen", scores: Array(18).fill("") };
+assert.equal(E.gameHandicap(creekFive, [creekLow, creekFive], E.COURSE, settings), 5);
+assert.equal(E.strokesForPlayerHole(creekFive, [creekLow, creekFive], E.COURSE, settings, 12), 0, "A Creek/White player receiving five strokes does not receive one on Upper handicap 6 Hole 13");
+assert.equal(E.courseHandicap(10, 130, 72.1, 72), 12);
+assert.equal(E.playingHandicap(10, { ...settings, allowance: 90 }, E.COURSE.tees.championship), 11);
+assert.deepEqual(E.COURSE.strokeIndexes.upper, [15,17,1,5,13,3,7,11,9,8,4,10,6,12,16,14,18,2]);
+assert.equal(E.strokesForHole(20, 1), 2);
+assert.equal(E.strokesForHole(20, 2), 2);
+assert.equal(E.strokesForHole(20, 3), 1);
+assert.equal(E.strokesForHole(-2, 18), -1);
+assert.equal(E.strokesForHole(-2, 17), -1);
+assert.equal(E.strokesForHole(-2, 16), 0);
+for (const handicap of [-36, -19, -2, 0, 7, 18, 23, 54]) {
+  const allocated = E.COURSE.strokeIndexes.upper.reduce((sum, si) => sum + E.strokesForHole(handicap, si), 0);
+  assert.equal(allocated, handicap);
+}
+
+const fieldLow = { id: "field-low", group: "A", ghin: 0, teeKey: "championship", scores: Array(18).fill("") };
+const fieldHigh = { id: "field-high", group: "F", ghin: 15, teeKey: "championship", scores: Array(18).fill("") };
+const scoreOnlyPlus = { id: "score-only-plus", group: "C", ghin: -10, teeKey: "championship", inGame: false, scores: Array(18).fill("") };
+const fieldPlayers = [fieldLow, fieldHigh, scoreOnlyPlus];
+assert.equal(E.lowestPlayingHandicap(fieldPlayers, E.COURSE, settings), E.playingHandicap(fieldLow.ghin, settings, E.COURSE.tees.championship));
+assert.equal(E.gameHandicap(fieldLow, fieldPlayers, E.COURSE, settings), 0);
+assert.equal(E.gameHandicap(fieldHigh, fieldPlayers, E.COURSE, settings), E.playingHandicap(fieldHigh.ghin, settings, E.COURSE.tees.championship) - E.playingHandicap(fieldLow.ghin, settings, E.COURSE.tees.championship));
+assert.equal(E.strokesForPlayerHole(fieldHigh, fieldPlayers, E.COURSE, settings, 1), 1, "The Group F player receives a stroke based on the game-wide Group A baseline");
+assert.equal(E.skinStrokesForPlayerHole(fieldHigh, fieldPlayers, E.COURSE, settings, 1), 0.5, "A par-3 stroke counts as one-half for skins");
+
+const cappedMatchPlayer = { ...fieldHigh, id: "capped-match", ghin: 54 };
+assert.ok(E.gameHandicap(cappedMatchPlayer, [fieldLow, cappedMatchPlayer], E.COURSE, settings) > 18);
+assert.equal(E.COURSE.holes.reduce((total, hole, holeIndex) => total + E.strokesForPlayerHole(cappedMatchPlayer, [fieldLow, cappedMatchPlayer], E.COURSE, settings, holeIndex), 0), 18, "Match strokes are capped at one per hole");
+assert.ok(E.COURSE.holes.every((hole, holeIndex) => E.strokesForPlayerHole(cappedMatchPlayer, [fieldLow, cappedMatchPlayer], E.COURSE, settings, holeIndex) <= 1));
+assert.equal(E.skinStrokesForPlayerHole(cappedMatchPlayer, [fieldLow, cappedMatchPlayer], E.COURSE, settings, 1), 0.5, "The capped par-3 match stroke still counts as one-half for skins");
+
+const noStrokeBirdie = { ...fieldLow, scores: Array(18).fill("") };
+const receivingPar = { ...fieldHigh, scores: Array(18).fill("") };
+noStrokeBirdie.scores[1] = 2;
+receivingPar.scores[1] = 3;
+assert.deepEqual(E.skinResult([noStrokeBirdie, receivingPar], E.COURSE, settings, 1), { status: "awarded", winnerId: "field-low", lowNet: 2 });
+assert.equal(E.playerTotals(receivingPar, E.COURSE, settings, [noStrokeBirdie, receivingPar]).total.net, 2, "The full stroke still counts toward ordinary net totals");
+noStrokeBirdie.scores[1] = 3;
+assert.deepEqual(E.skinResult([noStrokeBirdie, receivingPar], E.COURSE, settings, 1), { status: "awarded", winnerId: "field-high", lowNet: 2.5 });
+
+const plusBaseline = { ...fieldLow, id: "plus-baseline", ghin: -4, scores: E.COURSE.holes.map((hole) => hole.par) };
+const fullHandicapPlayer = { ...fieldHigh, scores: E.COURSE.holes.map((hole) => hole.par) };
+const fullPlayingHandicap = E.playingHandicap(fullHandicapPlayer.ghin, settings, E.COURSE.tees.championship);
+assert.ok(E.gameHandicap(fullHandicapPlayer, [plusBaseline, fullHandicapPlayer], E.COURSE, settings) > fullPlayingHandicap, "The match handicap includes the low-player baseline");
+const fullHandicapTotals = E.playerTotals(fullHandicapPlayer, E.COURSE, settings, [plusBaseline, fullHandicapPlayer]);
+assert.equal(fullHandicapTotals.total.net, 72 - fullPlayingHandicap, "TN uses the player's full handicap instead of the game-relative match handicap");
+assert.equal(fullHandicapTotals.front.net + fullHandicapTotals.back.net, 72 - fullPlayingHandicap, "FN and BN allocate the entire full handicap between both nines");
+
+const highHandicapPlayer = { ...fieldHigh, id: "high-handicap", ghin: 54, scores: E.COURSE.holes.map((hole) => hole.par) };
+const highPlayingHandicap = E.playingHandicap(highHandicapPlayer.ghin, settings, E.COURSE.tees.championship);
+const allocatedFullStrokes = E.COURSE.holes.reduce((total, hole, holeIndex) => total + E.fullHandicapStrokesForPlayerHole(highHandicapPlayer, E.COURSE, settings, holeIndex), 0);
+assert.ok(highPlayingHandicap > 54);
+assert.equal(allocatedFullStrokes, highPlayingHandicap, "Full-handicap net calculations do not cap allocated strokes");
+assert.equal(E.playerTotals(highHandicapPlayer, E.COURSE, settings).total.net, 72 - highPlayingHandicap);
+
+const ghinScratch = { ...fieldLow, id: "ghin-scratch", scores: E.COURSE.holes.map((hole) => hole.par) };
+ghinScratch.scores[0] = 9;
+assert.equal(E.courseHandicapForPlayer(ghinScratch, E.COURSE, settings), 0);
+assert.equal(E.ghinMaximumHoleScore(ghinScratch, E.COURSE, settings, 0), 6, "A scratch player is capped at double bogey on Hole 1");
+assert.equal(E.ghinAdjustedHoleScore(ghinScratch, E.COURSE, settings, 0), 6);
+assert.deepEqual(E.ghinAdjustedTotal(ghinScratch, E.COURSE, settings), { gross: 74, completed: true }, "GHIN adjusted gross totals capped hole scores");
+
+const ghinReceiving = { ...fieldHigh, id: "ghin-receiving", ghin: 10, scores: E.COURSE.holes.map((hole) => hole.par) };
+ghinReceiving.scores[2] = 10;
+assert.equal(E.ghinStrokesForPlayerHole(ghinReceiving, E.COURSE, settings, 2), 1);
+assert.equal(E.ghinMaximumHoleScore(ghinReceiving, E.COURSE, settings, 2), 8, "Net double bogey includes the Course Handicap stroke received");
+assert.equal(E.ghinAdjustedTotal(ghinReceiving, E.COURSE, settings).gross, 75);
+assert.equal(E.ghinMaximumHoleScore(ghinReceiving, E.COURSE, { ...settings, allowance: 50 }, 2), 8, "GHIN adjustment ignores the game handicap allowance");
+
+const ghinPlus = { ...fieldLow, id: "ghin-plus", ghin: -2, scores: E.COURSE.holes.map((hole) => hole.par) };
+ghinPlus.scores[1] = 8;
+assert.equal(E.courseHandicapForPlayer(ghinPlus, E.COURSE, settings), -2);
+assert.equal(E.ghinStrokesForPlayerHole(ghinPlus, E.COURSE, settings, 1), -1);
+assert.equal(E.ghinMaximumHoleScore(ghinPlus, E.COURSE, settings, 1), 4, "A plus Course Handicap gives back a stroke when establishing net double bogey");
+assert.equal(E.ghinAdjustedTotal(ghinPlus, E.COURSE, settings).gross, 73);
+
+const ghinAboveMaximum = { ...fieldHigh, id: "ghin-above-maximum", ghin: 54, scores: E.COURSE.holes.map((hole) => hole.par) };
+ghinAboveMaximum.scores[2] = 15;
+assert.ok(E.courseHandicapForPlayer(ghinAboveMaximum, E.COURSE, settings) > 54);
+assert.equal(E.ghinStrokesForPlayerHole(ghinAboveMaximum, E.COURSE, settings, 2), 4);
+assert.equal(E.ghinMaximumHoleScore(ghinAboveMaximum, E.COURSE, settings, 2), 10, "Course Handicaps above 54 use the USGA par-plus-five exception when four strokes fall on a hole");
+
+const incompleteGhin = { ...ghinScratch, scores: [...ghinScratch.scores] };
+incompleteGhin.scores[17] = "";
+assert.deepEqual(E.ghinAdjustedTotal(incompleteGhin, E.COURSE, settings), { gross: 70, completed: false });
+
+assert.equal(E.netScore(5, 2), 3);
+assert.equal(E.isEagle(3, 5), true);
+assert.equal(E.isEagle(2, 4), true);
+assert.equal(E.isEagle(2, 3), false);
+assert.equal(E.isBirdie(4, 5), true);
+assert.equal(E.isBirdie(3, 5), false);
+assert.equal(E.isBirdie(5, 5), false);
+assert.equal(E.scoreMark(3, 5), "eagle");
+assert.equal(E.scoreMark(4, 5), "birdie");
+assert.equal(E.scoreMark(5, 5), "par");
+assert.equal(E.scoreMark(6, 5), "bogey");
+assert.equal(E.scoreMark(7, 5), "double-bogey");
+assert.equal(E.scoreMark(8, 5), "double-bogey");
+assert.equal(E.scoreMark("", 5), "");
+assert.equal(E.steppedScore("", 4, 1), 4);
+assert.equal(E.steppedScore("", 4, -1), 4);
+assert.equal(E.steppedScore(4, 4, 1), 5);
+assert.equal(E.steppedScore(4, 4, -1), 3);
+
+const partialRound = { id: "partial", ghin: 0, teeKey: "championship", scores: [4, 3, 5, ...Array(15).fill("")] };
+const partialTotals = E.playerTotals(partialRound, E.COURSE, settings);
+assert.equal(partialTotals.total.gross, 12);
+assert.equal(partialTotals.total.completed, false);
+
+const alice = { id: "a", name: "Alice", ghin: 0, teeKey: "championship", scores: E.COURSE.holes.map((h) => h.par), skins: Array(18).fill(false), sandies: Array(18).fill(false) };
+const bob = { id: "b", name: "Bob", ghin: 0, teeKey: "member", scores: E.COURSE.holes.map((h) => h.par), skins: Array(18).fill(false), sandies: Array(18).fill(false) };
+const incompleteFrontPlayer = { ...bob, id: "front-incomplete", group: "B", scores: [...bob.scores] };
+incompleteFrontPlayer.scores[8] = "";
+assert.deepEqual(E.leaders([alice, incompleteFrontPlayer], E.COURSE, settings, "front"), [], "FN remains unawarded until every competing player completes holes 1-9");
+assert.deepEqual(E.leaders([alice, incompleteFrontPlayer], E.COURSE, settings, "total"), [], "TN remains unawarded when the front nine is incomplete");
+assert.notDeepEqual(E.leaders([alice, incompleteFrontPlayer], E.COURSE, settings, "back"), [], "BN may be awarded once every competing player completes holes 10-18");
+const incompleteBackPlayer = { ...bob, id: "back-incomplete", group: "C", scores: [...bob.scores] };
+incompleteBackPlayer.scores[17] = "";
+assert.deepEqual(E.leaders([alice, incompleteBackPlayer], E.COURSE, settings, "back"), [], "BN remains unawarded until every competing player completes holes 10-18");
+assert.deepEqual(E.leaders([alice, incompleteBackPlayer], E.COURSE, settings, "total"), [], "TN remains unawarded when the back nine is incomplete");
+assert.notDeepEqual(E.leaders([alice, incompleteBackPlayer], E.COURSE, settings, "front"), [], "FN may be awarded once every competing player completes holes 1-9");
+alice.scores[0] = 3;
+alice.sandies[1] = true;
+settings.kpWinners["2"] = "a";
+const tics = E.ticSummary(alice, [alice, bob], E.COURSE, settings);
+assert.deepEqual(tics, { birdies: 1, eagles: 0, skins: 3, front: 1, frontWeight: 2, back: 1, backWeight: 2, totalNet: 1, totalNetWeight: 2, sandies: 1, kps: 1, kpMarked: 0, total: 9, weightedTics: 12, pointsEarned: 6 });
+const sandyBirdiePlayer = { ...alice, id: "sandy-birdie", scores: [...alice.scores], sandies: [...alice.sandies] };
+sandyBirdiePlayer.sandies[0] = true;
+const sandyBirdieTics = E.ticSummary(sandyBirdiePlayer, [sandyBirdiePlayer, bob], E.COURSE, { ...settings, kpWinners: {}, kpClaims: {} });
+assert.equal(sandyBirdieTics.birdies, 1, "A Sandy birdie still earns the separate birdie tic");
+assert.equal(sandyBirdieTics.sandies, 2, "Par and birdie sand saves share one Sandy category");
+const noBunkerSandyPlayer = { ...alice, id: "no-bunker-sandy", scores: [...alice.scores], sandies: Array(18).fill(false) };
+noBunkerSandyPlayer.sandies[3] = true;
+noBunkerSandyPlayer.sandies[11] = true;
+assert.equal(E.sandyAllowedForHole(E.COURSE, 3), false);
+assert.equal(E.sandyAllowedForHole(E.COURSE, 11), false);
+assert.equal(E.ticSummary(noBunkerSandyPlayer, [noBunkerSandyPlayer, bob], E.COURSE, { ...settings, kpWinners: {}, kpClaims: {} }).sandies, 0, "Holes 4 and 12 cannot earn Sandy tics");
+const aliceLedger = E.pointsLedger(alice, [alice, bob], E.COURSE, settings);
+const bobLedger = E.pointsLedger(bob, [alice, bob], E.COURSE, settings);
+assert.equal(aliceLedger.positive, 6);
+assert.equal(Math.abs(aliceLedger.negative), E.ticSummary(bob, [alice, bob], E.COURSE, settings).pointsEarned);
+assert.equal(aliceLedger.net + bobLedger.net, 0);
+const supplantedKpSettings = { ...settings, kpWinners: { 2: "b" }, kpClaims: { 2: ["a", "b"] } };
+assert.equal(E.ticSummary(alice, [alice, bob], E.COURSE, supplantedKpSettings).kps, 0);
+assert.equal(E.kpClaimStatus(alice, E.COURSE, supplantedKpSettings, 1), "marked");
+assert.equal(E.ticSummary(alice, [alice, bob], E.COURSE, supplantedKpSettings).kpMarked, 1);
+assert.equal(E.ticSummary(alice, [alice, bob], E.COURSE, supplantedKpSettings).pointsEarned, E.ticSummary(alice, [alice, bob], E.COURSE, { ...supplantedKpSettings, kpWinners: {}, kpClaims: {} }).pointsEarned);
+assert.equal(E.ticSummary(bob, [alice, bob], E.COURSE, supplantedKpSettings).kps, 1);
+assert.equal(E.kpClaimStatus(bob, E.COURSE, supplantedKpSettings, 1), "kp");
+assert.equal(E.ticSummary(bob, [alice, bob], E.COURSE, supplantedKpSettings).kpMarked, 0);
+assert.equal(E.kpCode(alice, [alice, bob], E.COURSE, supplantedKpSettings, "marked"), "1000");
+assert.equal(E.kpCode(bob, [alice, bob], E.COURSE, supplantedKpSettings, "kp"), "1000");
+assert.equal(E.kpCode(alice, [alice, bob], E.COURSE, { ...settings, kpWinners: {}, kpClaims: {} }, "kp"), "0000");
+const twoHoleKpSettings = { ...settings, kpWinners: { 2: "b", 8: "b" }, kpClaims: { 2: ["a", "b"], 8: ["a", "b"] } };
+assert.equal(E.kpCode(alice, [alice, bob], E.COURSE, twoHoleKpSettings, "marked"), "1100");
+assert.equal(E.kpCode(bob, [alice, bob], E.COURSE, twoHoleKpSettings, "kp"), "1100");
+const failedCurrent = { ...bob, scores: [...bob.scores] };
+failedCurrent.scores[1] = 4;
+assert.equal(E.kpClaimStatus(failedCurrent, E.COURSE, supplantedKpSettings, 1, [alice, failedCurrent]), "marked");
+assert.equal(E.ticSummary(failedCurrent, [alice, failedCurrent], E.COURSE, supplantedKpSettings).kps, 0);
+assert.equal(E.ticSummary(failedCurrent, [alice, failedCurrent], E.COURSE, supplantedKpSettings).kpMarked, 1);
+assert.equal(E.ticSummary(failedCurrent, [alice, failedCurrent], E.COURSE, supplantedKpSettings).pointsEarned, E.ticSummary(failedCurrent, [alice, failedCurrent], E.COURSE, { ...supplantedKpSettings, kpWinners: {}, kpClaims: {} }).pointsEarned);
+const noAwardPlayers = [alice, failedCurrent];
+assert.equal(noAwardPlayers.reduce((sum, player) => sum + E.ticSummary(player, noAwardPlayers, E.COURSE, supplantedKpSettings).kps, 0), 0);
+const laterQualifying = { ...bob, id: "c", name: "Carol", scores: [...bob.scores] };
+laterQualifying.scores[1] = 3;
+const laterQualifyingSettings = { ...settings, kpWinners: { 2: "c" }, kpClaims: { 2: ["a", "b", "c"] } };
+const laterClaimPlayers = [alice, failedCurrent, laterQualifying];
+assert.equal(E.kpClaimStatus(alice, E.COURSE, laterQualifyingSettings, 1), "marked");
+assert.equal(E.kpClaimStatus(failedCurrent, E.COURSE, laterQualifyingSettings, 1), "marked");
+assert.equal(E.kpClaimStatus(laterQualifying, E.COURSE, laterQualifyingSettings, 1), "kp");
+assert.equal(laterClaimPlayers.reduce((sum, player) => sum + E.ticSummary(player, laterClaimPlayers, E.COURSE, laterQualifyingSettings).kps, 0), 1);
+const pendingCurrent = { ...bob, scores: [...bob.scores] };
+pendingCurrent.scores[1] = "";
+assert.equal(E.kpClaimStatus(pendingCurrent, E.COURSE, supplantedKpSettings, 1, [alice, pendingCurrent]), "pending");
+assert.equal(E.ticSummary(pendingCurrent, [alice, pendingCurrent], E.COURSE, supplantedKpSettings).kps, 0);
+assert.equal(E.ticSummary(pendingCurrent, [alice, pendingCurrent], E.COURSE, supplantedKpSettings).kpMarked, 0);
+const missingOpponentScore = { ...alice, scores: [...alice.scores] };
+missingOpponentScore.scores[1] = "";
+assert.equal(E.kpClaimStatus(bob, E.COURSE, supplantedKpSettings, 1, [missingOpponentScore, bob]), "pending");
+const threePlayerLedger = [alice, bob, { ...bob, id: "c", name: "Carol" }];
+assert.equal(threePlayerLedger.reduce((sum, player) => sum + E.pointsLedger(player, threePlayerLedger, E.COURSE, settings).net, 0), 0);
+
+const tieA = { ...alice, id: "tie-a", scores: E.COURSE.holes.map((h) => h.par), sandies: Array(18).fill(false) };
+const tieB = { ...tieA, id: "tie-b" };
+const tieTics = E.ticSummary(tieA, [tieA, tieB], E.COURSE, { ...settings, kpWinners: {} });
+assert.equal(tieTics.frontWeight, 1);
+assert.equal(tieTics.backWeight, 1);
+assert.equal(tieTics.totalNetWeight, 1);
+assert.equal(tieTics.pointsEarned, 1.5);
+
+const tieC = { ...tieA, id: "tie-c" };
+const threeWayTiePlayers = [tieA, tieB, tieC];
+threeWayTiePlayers.forEach((player) => {
+  const threeWayTieTics = E.ticSummary(player, threeWayTiePlayers, E.COURSE, { ...settings, kpWinners: {} });
+  assert.equal(threeWayTieTics.frontWeight, 1, "Every player in a three-way FN tie receives one tic");
+  assert.equal(threeWayTieTics.backWeight, 1, "Every player in a three-way BN tie receives one tic");
+  assert.equal(threeWayTieTics.totalNetWeight, 1, "Every player in a three-way TN tie receives one tic");
+});
+
+const eaglePlayer = { ...alice, id: "eagle", scores: Array(18).fill(""), sandies: Array(18).fill(false) };
+const incompletePlayer = { ...bob, id: "incomplete", scores: Array(18).fill(""), sandies: Array(18).fill(false) };
+eaglePlayer.scores[2] = 3;
+const eagleTics = E.ticSummary(eaglePlayer, [eaglePlayer, incompletePlayer], E.COURSE, { ...settings, kpWinners: {} });
+assert.equal(eagleTics.birdies, 1);
+assert.equal(eagleTics.eagles, 1);
+assert.equal(eagleTics.weightedTics, 2);
+assert.equal(eagleTics.pointsEarned, 1);
+
+const scratch = { ...alice, id: "scratch", scores: [4, ...Array(17).fill("")] };
+const eighteen = { ...bob, id: "eighteen", ghin: 18, scores: [4, ...Array(17).fill("")] };
+assert.deepEqual(E.skinResult([scratch, eighteen], E.COURSE, settings, 0), { status: "awarded", winnerId: "eighteen", lowNet: 3 });
+scratch.scores[0] = 3;
+assert.deepEqual(E.skinResult([scratch, eighteen], E.COURSE, settings, 0), { status: "tie", winnerId: null, lowNet: 3 });
+eighteen.scores[0] = "";
+assert.deepEqual(E.skinResult([scratch, eighteen], E.COURSE, settings, 0), { status: "pending", winnerId: null, lowNet: null });
+assert.deepEqual(E.skinPendingLeaders([scratch, eighteen], E.COURSE, settings, 0), ["scratch"]);
+const scoreOnly = { ...bob, id: "score-only", inGame: false, scores: Array(18).fill(1), sandies: Array(18).fill(true) };
+assert.equal(E.isInGame(scoreOnly), false);
+assert.deepEqual(E.gamePlayers([alice, bob, scoreOnly]).map((player) => player.id), ["a", "b"]);
+assert.equal(E.leaders([alice, bob, scoreOnly], E.COURSE, settings, "front").includes("score-only"), false);
+assert.notDeepEqual(E.leaders([alice, bob, { ...scoreOnly, scores: Array(18).fill("") }], E.COURSE, settings, "front"), [], "A score-only player does not delay FN awards");
+assert.deepEqual(E.skinResult([alice, bob, { ...scoreOnly, scores: Array(18).fill("") }], E.COURSE, settings, 0), { status: "awarded", winnerId: "a", lowNet: 3 });
+assert.deepEqual(E.ticSummary(scoreOnly, [alice, bob, scoreOnly], E.COURSE, settings), { birdies: 0, eagles: 0, skins: 0, front: 0, frontWeight: 0, back: 0, backWeight: 0, totalNet: 0, totalNetWeight: 0, sandies: 0, kps: 0, kpMarked: 0, total: 0, weightedTics: 0, pointsEarned: 0 });
+assert.deepEqual(E.pointsLedger(scoreOnly, [alice, bob, scoreOnly], E.COURSE, settings), { achievementPoints: 0, positive: 0, negative: 0, net: 0 });
+assert.deepEqual(E.pointsLedger(alice, [alice, bob, scoreOnly], E.COURSE, settings), E.pointsLedger(alice, [alice, bob], E.COURSE, settings));
+assert.equal(E.settleNetPoints(12.5, true), 13);
+assert.equal(E.settleNetPoints(-3.5, true), -4);
+assert.equal(E.settleNetPoints(12.5, false), 12.5, "Half points remain visible while the round is in progress");
+assert.equal(E.settleNetPoints(-4, true), -4);
+assert.deepEqual(E.pointsRoundingTotals([12.5, -3.5, -9], true), { winnersTotal: 13, losersTotal: 13, winnerReduction: 0, tips: 0 });
+assert.equal(E.bccTipsFromNetPoints([12.5, -3.5, -9], true), 0);
+assert.deepEqual(E.pointsRoundingTotals([12.5, 4.5, -17], true), { winnersTotal: 17, losersTotal: 17, winnerReduction: 1, tips: 0 });
+assert.deepEqual(E.settlePointValues([12.5, 4.5, -17], true).settledValues, [12, 5, -17], "An excess winners total is deducted from the largest winner");
+assert.deepEqual(E.pointsRoundingTotals([1.5, -0.5, -0.5, -0.5], true), { winnersTotal: 2, losersTotal: 3, winnerReduction: 0, tips: 1 });
+const testRoundSettlement = E.settlePointValues([27, 9.5, 2.5, -4.5, -11.5, -11.5, -11.5], true);
+assert.deepEqual(testRoundSettlement.settledValues, [27, 10, 3, -5, -12, -12, -12]);
+assert.deepEqual(E.pointsRoundingTotals([27, 9.5, 2.5, -4.5, -11.5, -11.5, -11.5], true), { winnersTotal: 40, losersTotal: 41, winnerReduction: 0, tips: 1 });
+assert.equal(E.bccTipsFromNetPoints([12.5, -3.5, -9], false), 0);
+assert.equal(E.isRoundComplete([tieA, tieB, tieC]), true);
+assert.equal(E.isRoundComplete([{ ...tieA, scores: ["", ...tieA.scores.slice(1)] }, tieB]), false);
+const tieSettlement = E.pointsSettlement([tieA, tieB, tieC], E.COURSE, { ...settings, kpWinners: {} });
+assert.equal(tieSettlement.complete, true);
+assert.ok(tieSettlement.entries.every((entry) => Number.isInteger(entry.settledNet)));
+assert.equal(tieSettlement.totalToCollect, tieSettlement.entries.reduce((sum, entry) => sum + Math.max(0, -entry.settledNet), 0), "Total to Collect must equal the absolute sum of all rounded negative player totals");
+assert.equal(tieSettlement.entries.reduce((sum, entry) => sum + entry.settledNet, 0) + tieSettlement.tips, 0, "Settled player balances plus BCCC Tips must balance to zero");
+console.log("All score engine tests passed.");

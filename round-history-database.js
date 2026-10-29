@@ -1,0 +1,164 @@
+"use strict";
+
+const fs = require("node:fs");
+const path = require("node:path");
+const crypto = require("node:crypto");
+const { DatabaseSync } = require("node:sqlite");
+
+function metadataFromRow(row) {
+  let roundId = String(row?.round_id || "");
+  let changeCount = 0;
+  if (!roundId && row?.state_json) {
+    try {
+      const parsedState = JSON.parse(row.state_json);
+      roundId = String(parsedState.roundId || "");
+      changeCount = Array.isArray(parsedState.auditLog) ? parsedState.auditLog.length : 0;
+    }
+    catch (_) { roundId = ""; }
+  } else if (row?.state_json) {
+    try {
+      const parsedState = JSON.parse(row.state_json);
+      changeCount = Array.isArray(parsedState.auditLog) ? parsedState.auditLog.length : 0;
+    }
+    catch (_) { changeCount = 0; }
+  }
+  return row ? {
+    id: row.id,
+    roundId,
+    roundName: row.round_name,
+    date: row.round_date,
+    playerCount: Number(row.player_count),
+    completed: Boolean(row.completed),
+    locked: Boolean(row.locked),
+    savedAt: row.saved_at,
+    changeCount
+  } : null;
+}
+
+class RoundHistoryDatabase {
+  constructor(filePath) {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    this.db = new DatabaseSync(filePath);
+    this.db.exec("PRAGMA journal_mode = WAL");
+    this.db.exec("PRAGMA busy_timeout = 5000");
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS saved_rounds (
+        id TEXT PRIMARY KEY,
+        round_name TEXT NOT NULL,
+        round_date TEXT NOT NULL,
+        player_count INTEGER NOT NULL,
+        completed INTEGER NOT NULL DEFAULT 0,
+        locked INTEGER NOT NULL DEFAULT 0,
+        saved_at TEXT NOT NULL,
+        state_json TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_saved_rounds_saved_at
+      ON saved_rounds(saved_at DESC);
+      PRAGMA optimize;
+    `);
+    this.listStatement = this.db.prepare("SELECT id, round_name, round_date, player_count, completed, locked, saved_at, state_json FROM saved_rounds ORDER BY saved_at DESC");
+    this.findStatement = this.db.prepare("SELECT * FROM saved_rounds WHERE id = ?");
+    this.insertStatement = this.db.prepare("INSERT INTO saved_rounds (id, round_name, round_date, player_count, completed, locked, saved_at, state_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+    this.deleteStatement = this.db.prepare("DELETE FROM saved_rounds WHERE id = ?");
+  }
+
+  list() { return this.listStatement.all().map(metadataFromRow); }
+
+  latest() {
+    const [mostRecent] = this.list();
+    return mostRecent ? this.find(mostRecent.id) : null;
+  }
+
+  find(id) {
+    const row = this.findStatement.get(String(id));
+    if (!row) return null;
+    return { ...metadataFromRow(row), state: JSON.parse(row.state_json) };
+  }
+
+  create(state, options = {}) {
+    const allowIncomplete = options.allowIncomplete === true;
+    if (!state || !Array.isArray(state.players)) throw new Error("The round data is invalid");
+    if (!state.players.length && !allowIncomplete) throw new Error("Add at least one player before saving the round");
+    if (!state.players.length && !(Array.isArray(state.auditLog) && state.auditLog.length)) throw new Error("There is no round activity to archive");
+    const id = crypto.randomUUID();
+    const savedAt = new Date().toISOString();
+    const completed = state.players.length > 0 && state.players.every((player) => Array.isArray(player.scores) && player.scores.length === 18 && player.scores.every((score) => Number(score) >= 1));
+    if (!completed && !allowIncomplete) throw new Error("Complete every player's 18-hole scorecard before saving the round");
+    this.insertStatement.run(
+      id,
+      String(state.roundName || "Berry Creek Round").slice(0, 60),
+      String(state.date || savedAt.slice(0, 10)).slice(0, 10),
+      state.players.length,
+      completed ? 1 : 0,
+      state.settings?.locked ? 1 : 0,
+      savedAt,
+      JSON.stringify(state)
+    );
+    return this.find(id);
+  }
+
+  remove(id) {
+    const current = this.find(id);
+    if (!current) throw new Error("Saved round not found");
+    this.deleteStatement.run(String(id));
+    return metadataFromRow({
+      id: current.id,
+      round_id: current.roundId,
+      round_name: current.roundName,
+      round_date: current.date,
+      player_count: current.playerCount,
+      completed: current.completed ? 1 : 0,
+      locked: current.locked ? 1 : 0,
+      saved_at: current.savedAt
+    });
+  }
+
+  exportAll() {
+    return this.list().map((round) => this.find(round.id));
+  }
+
+  replaceAll(values) {
+    if (!Array.isArray(values)) throw new Error("Saved rounds must be an array");
+    const ids = new Set();
+    const rounds = values.map((value) => {
+      if (!value?.state || !Array.isArray(value.state.players)) throw new Error("A saved round in the backup is invalid");
+      const id = String(value.id || crypto.randomUUID()).slice(0, 100);
+      if (ids.has(id)) throw new Error("The backup contains duplicate saved-round IDs");
+      ids.add(id);
+      const savedAt = String(value.savedAt || new Date().toISOString()).slice(0, 40);
+      return {
+        id,
+        roundName: String(value.roundName || value.state.roundName || "Berry Creek Round").slice(0, 60),
+        date: String(value.date || value.state.date || savedAt.slice(0, 10)).slice(0, 10),
+        playerCount: Array.isArray(value.state.players) ? value.state.players.length : Number(value.playerCount) || 0,
+        completed: Boolean(value.completed),
+        locked: Boolean(value.locked ?? value.state.settings?.locked),
+        savedAt,
+        state: value.state
+      };
+    });
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.exec("DELETE FROM saved_rounds");
+      rounds.forEach((round) => this.insertStatement.run(
+        round.id,
+        round.roundName,
+        round.date,
+        round.playerCount,
+        round.completed ? 1 : 0,
+        round.locked ? 1 : 0,
+        round.savedAt,
+        JSON.stringify(round.state)
+      ));
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+    return this.list();
+  }
+
+  close() { this.db.close(); }
+}
+
+module.exports = RoundHistoryDatabase;

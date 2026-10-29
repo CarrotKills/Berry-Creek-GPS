@@ -1,0 +1,82 @@
+"use strict";
+
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+
+const html = fs.readFileSync("index.html", "utf8");
+const app = fs.readFileSync("app.js", "utf8");
+const css = fs.readFileSync("styles.css", "utf8");
+
+const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]);
+assert.equal(new Set(ids).size, ids.length, "Every element id must be unique");
+
+assert.match(html, /id="mobileScoringDock"/);
+assert.match(html, /id="mobileScoringStatus"/);
+assert.match(html, /id="mobileMissingScoresReminder"[^>]+role="alert"/);
+assert.match(html, /id="mobilePrevHoleBtn"/);
+assert.match(html, /id="mobileHoleSelect"/);
+assert.match(html, /id="mobileNextHoleBtn"/);
+assert.ok(html.indexOf('id="mobileScoringDock"') > html.indexOf('id="groupScorecardPanel"'));
+
+assert.match(app, /\[\$\("#holeSelect"\), \$\("#mobileHoleSelect"\)\]/);
+assert.match(app, /mobileScoringStatus"\)\.textContent = `Group \$\{selectedGroup\} · Hole \$\{selectedHole\}/);
+assert.match(app, /mobileHoleSelect"\)\.addEventListener\("change"/);
+assert.match(app, /mobilePrevHoleBtn"\)\.addEventListener\("click"/);
+assert.match(app, /mobileNextHoleBtn"\)\.addEventListener\("click"/);
+assert.match(app, /const HEADER_COMPACT_ENTER_Y = 112;/);
+assert.match(app, /const HEADER_COMPACT_EXIT_Y = 32;/);
+assert.match(app, /const HEADER_MODE_SETTLE_MS = 120;/);
+assert.match(app, /const IS_ANDROID = \/Android\/i\.test\(navigator\.userAgent \|\| ""\)/);
+assert.match(app, /const shouldCompact = mobile && \(IS_ANDROID \|\| \(compact \? window\.scrollY > HEADER_COMPACT_EXIT_Y : window\.scrollY >= HEADER_COMPACT_ENTER_Y\)\);/);
+assert.match(app, /new ResizeObserver\(scheduleHeaderHeight\)/);
+assert.match(app, /window\.addEventListener\("scroll", scheduleHeaderLayout, \{ passive: true \}\)/);
+assert.doesNotMatch(app, /window\.addEventListener\("resize", scheduleHeaderLayout\)/);
+assert.match(app, /window\.addEventListener\("orientationchange", settleHeaderAfterOrientationChange\)/);
+assert.doesNotMatch(css, /\.app-header \{[^}]*transition:\s*padding/s);
+assert.doesNotMatch(css, /\.club-logo \{[^}]*transition:\s*width/s);
+assert.match(css, /body\.android-device \.app-header \{[^}]*height: 50px;[^}]*backdrop-filter: none;[^}]*contain: paint;/s);
+assert.match(css, /body\.android-device \.round-identity-bar \{ top: 50px; \}/);
+assert.match(css, /body\.android-device \.tabs, body\.android-device \.mobile-scoring-dock \{[^}]*backdrop-filter: none;/s);
+assert.match(html, /id="adminBtn"[^>]*data-compact-label="Login"[^>]*aria-label="Sign in"/);
+assert.match(app, /adminButton\.dataset\.compactLabel = currentUser \? "Logout" : "Login";/);
+assert.match(app, /adminButton\.setAttribute\("aria-label", currentUser \? `Sign out \$\{currentUser\.name\}` : "Sign in"\);/);
+assert.match(css, /body\.android-device #adminBtn \{[^}]*display: inline-flex;[^}]*min-height: 36px;[^}]*max-width: 58px;/s);
+assert.match(css, /body\.android-device #adminBtn::after \{ content: attr\(data-compact-label\);/);
+assert.match(css, /body\.android-device\.spectator-mode #adminBtn \{ display: none; \}/);
+assert.match(app, /dispatchWithTouchFeedback/);
+assert.match(app, /Sandy marked/);
+assert.match(app, /KP marked/);
+assert.match(app, /Scorekeeper assigned/);
+assert.match(app, /navigator\.vibrate\(12\)/);
+assert.match(app, /class="score-card-controls"/);
+assert.match(app, /class="tic-toggle compact-tic-toggle sandy-toggle"[^>]*>[\s\S]*?SD<\/label>/);
+assert.match(app, /class="tic-toggle compact-tic-toggle kp-toggle"[^>]*>[\s\S]*?KP<\/label>/);
+assert.match(app, /score-stepper[\s\S]*?sandy-toggle[\s\S]*?kp-toggle[\s\S]*?<span>Match net<\/span>/);
+assert.doesNotMatch(app, /class="score-group-pill">Group/);
+assert.doesNotMatch(app, /class="score-state-badge/);
+
+assert.match(css, /\.mobile-scoring-dock \{ display: none; \}/);
+assert.match(css, /\.mobile-scoring-dock \{ position: fixed; right: 0; bottom: calc\(4\.05rem \+ env\(safe-area-inset-bottom\)\); left: 0;/);
+assert.match(css, /\.mobile-missing-scores-reminder \{[^}]*background: var\(--danger\)/s);
+assert.match(css, /env\(safe-area-inset-bottom\)/);
+assert.match(css, /\.app-header \{ position: sticky; top: 0; z-index: 40;/);
+assert.match(css, /\.tabs \{ position: fixed; top: auto; right: 0; bottom: 0; left: 0; z-index: 50;[^}]*grid-template-columns: repeat\(5, minmax\(0, 1fr\)\)/s);
+assert.match(css, /\.tab \{ display: grid; justify-items: center;[^}]*min-height: 3\.45rem/s);
+assert.match(css, /body\.header-compact \.compact-app-title \{ display: block; \}/);
+assert.match(css, /body:has\(\.score-stepper input:focus\) \.mobile-scoring-dock \{ display: none; \}/);
+assert.match(css, /@media \(max-width: 760px\)[\s\S]*\.hole-banner \{ gap: 0\.3rem 0\.6rem; margin-bottom: 0\.4rem; padding: 0\.48rem 0\.65rem; \}/);
+assert.match(css, /@media \(max-width: 760px\)[\s\S]*\.group-score-list \{ gap: 0\.22rem; \}/);
+assert.match(css, /\.score-card-controls \{ display: grid; grid-template-columns: minmax\(132px, 1fr\) auto auto 58px;/);
+assert.match(css, /\.group-score-card \.net-box \{ grid-column: 4; grid-row: 1;/);
+assert.doesNotMatch(css, /\.hole-meta, \.net-box \{ grid-row: 2; \}/);
+assert.match(css, /\.hole-entry > \.hole-meta, \.hole-entry > \.net-box \{ grid-row: 2; \}/);
+assert.match(css, /@media \(max-width: 480px\)[\s\S]*\.group-score-card \{ gap: 0\.2rem; padding: 0\.35rem; \}/);
+assert.match(css, /@media \(max-width: 480px\)[\s\S]*\.score-card-controls \{ grid-template-columns: minmax\(116px, 1fr\) auto auto 50px;/);
+assert.match(css, /@media \(max-width: 480px\)[\s\S]*\.group-score-card \.score-stepper button \{ width: 34px; height: 34px;/);
+assert.match(css, /@media \(max-width: 480px\)[\s\S]*\.score-card-controls \.compact-tic-toggle \{ min-height: 34px;/);
+assert.match(css, /@media \(max-width: 480px\)[\s\S]*\.group-score-card \.net-box \{ min-height: 34px;/);
+assert.match(css, /button:not\(:disabled\):active/);
+assert.match(css, /\.touch-confirmation/);
+assert.match(css, /@media \(prefers-reduced-motion: reduce\)/);
+
+console.log("Mobile scoring UI tests passed.");

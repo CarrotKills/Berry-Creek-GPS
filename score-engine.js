@@ -1,0 +1,483 @@
+(function (root, factory) {
+  const api = factory();
+  if (typeof module === "object" && module.exports) module.exports = api;
+  root.BerryCreekScoring = api;
+})(typeof globalThis !== "undefined" ? globalThis : this, function () {
+  "use strict";
+
+  const COURSE = Object.freeze({
+    name: "The Club at Berry Creek",
+    par: 72,
+    defaultTee: "championship",
+    holes: [
+      { number: 1, par: 4 }, { number: 2, par: 3 }, { number: 3, par: 5 },
+      { number: 4, par: 4 }, { number: 5, par: 4 }, { number: 6, par: 4 },
+      { number: 7, par: 5 }, { number: 8, par: 3 }, { number: 9, par: 4 },
+      { number: 10, par: 4 }, { number: 11, par: 5 }, { number: 12, par: 3 },
+      { number: 13, par: 5 }, { number: 14, par: 4 }, { number: 15, par: 4 },
+      { number: 16, par: 4 }, { number: 17, par: 3 }, { number: 18, par: 4 }
+    ],
+    strokeIndexes: {
+      upper: [15, 17, 1, 5, 13, 3, 7, 11, 9, 8, 4, 10, 6, 12, 16, 14, 18, 2],
+      lower: [14, 18, 2, 16, 8, 4, 6, 12, 10, 9, 1, 15, 3, 7, 11, 13, 17, 5]
+    },
+    tees: {
+      championship: { name: "Championship/Gold/1", rating: 72.1, slope: 130, yards: [373,172,548,436,321,457,544,175,326,374,529,181,547,308,334,385,169,421], strokeSet: "upper" },
+      member: { name: "Member/Blue/2", rating: 70.0, slope: 128, yards: [342,164,502,414,278,421,506,159,316,368,503,161,508,271,298,341,153,399], strokeSet: "upper" },
+      memberCreekCombo: { name: "Combo/23", rating: 68.1, slope: 121, yards: [342,164,450,346,278,385,506,159,231,312,475,161,473,271,298,341,153,362], strokeSet: "upper" },
+      creekMen: { name: "Creek/White/3", rating: 67.1, slope: 118, yards: [288,152,450,346,260,385,454,134,231,312,475,135,473,256,280,328,148,362], strokeSet: "upper" },
+      creekWomen: { name: "Legacy Creek (Women)", rating: 72.0, slope: 123, yards: [288,152,450,346,260,385,454,134,231,312,475,135,473,256,280,328,148,362], strokeSet: "upper", selectable: false },
+      creekBerryCombo: { name: "Legacy Creek/Berry Combo", rating: 71.0, slope: 122, yards: [288,126,450,346,250,359,438,134,231,297,475,121,452,256,280,302,148,338], strokeSet: "upper", selectable: false },
+      berryMen: { name: "Legacy Berry (Men)", rating: 64.7, slope: 114, yards: [255,126,400,245,250,359,438,120,212,297,453,121,452,247,266,302,136,338], strokeSet: "upper", selectable: false },
+      berryWomen: { name: "Legacy Berry (Women)", rating: 70.0, slope: 120, yards: [255,126,400,245,250,359,438,120,212,297,453,121,452,247,266,302,136,338], strokeSet: "upper", selectable: false }
+    }
+  });
+
+  const LEGACY_TEE_ALIASES = Object.freeze({
+    creekWomen: "creekMen",
+    creekBerryCombo: "creekMen",
+    berryMen: "creekMen",
+    berryWomen: "creekMen"
+  });
+
+  function normalizeTeeKey(course, teeKey) {
+    const requested = String(teeKey || course.defaultTee);
+    const normalized = LEGACY_TEE_ALIASES[requested] || requested;
+    const tee = course.tees[normalized];
+    return tee && tee.selectable !== false ? normalized : course.defaultTee;
+  }
+
+  function teeForPlayer(course, player) {
+    return course.tees[normalizeTeeKey(course, player?.teeKey)] || course.tees[course.defaultTee];
+  }
+
+  function holesForPlayer(course, player) {
+    const tee = teeForPlayer(course, player);
+    const indexes = course.strokeIndexes.upper;
+    return course.holes.map((hole, i) => ({ ...hole, yards: tee.yards[i], strokeIndex: indexes[i] }));
+  }
+
+  function roundHandicap(value) {
+    return Math.round(Number(value) + Number.EPSILON);
+  }
+
+  function parseHandicapInput(value) {
+    const text = String(value ?? "").trim();
+    if (!text) return 0;
+    const numeric = Number(text);
+    if (!Number.isFinite(numeric)) return 0;
+    return text.startsWith("+") ? -Math.abs(numeric) : numeric;
+  }
+
+  function formatHandicap(value, decimals = 1) {
+    const numeric = Number(value);
+    const safe = Number.isFinite(numeric) ? numeric : 0;
+    const formatted = Math.abs(safe).toFixed(decimals);
+    return safe < 0 ? `+${formatted}` : formatted;
+  }
+
+  function courseHandicap(index, slope, rating, par) {
+    return roundHandicap(Number(index) * (Number(slope) / 113) + (Number(rating) - Number(par)));
+  }
+
+  function playingHandicap(index, settings, tee) {
+    const rating = tee?.rating ?? settings.rating;
+    const slope = tee?.slope ?? settings.slope;
+    const course = courseHandicap(index, slope, rating, settings.par);
+    return roundHandicap(course * (Number(settings.allowance) / 100));
+  }
+
+  function strokesForHole(handicap, strokeIndex) {
+    const h = Math.trunc(Number(handicap) || 0);
+    const si = Number(strokeIndex);
+    if (h >= 0) return Math.floor(h / 18) + (si <= h % 18 ? 1 : 0);
+    const owed = Math.abs(h);
+    const given = Math.floor(owed / 18) + (si > 18 - (owed % 18) ? 1 : 0);
+    return given ? -given : 0;
+  }
+
+  function netScore(gross, strokes) {
+    if (gross === "" || gross === null || gross === undefined) return null;
+    return Number(gross) - Number(strokes || 0);
+  }
+
+  function isEagle(gross, par) {
+    return Number(gross) >= 1 && Number(gross) === Number(par) - 2;
+  }
+
+  function isBirdie(gross, par) {
+    return Number(gross) >= 1 && Number(gross) === Number(par) - 1;
+  }
+
+  function sandyAllowedForHole(course, holeIndex) {
+    const holeNumber = Number(course?.holes?.[holeIndex]?.number || holeIndex + 1);
+    return ![4, 12].includes(holeNumber);
+  }
+
+  function scoreMark(gross, par) {
+    if (gross === "" || gross === null || gross === undefined) return "";
+    const score = Number(gross);
+    const holePar = Number(par);
+    if (!Number.isFinite(score) || score < 1 || !Number.isFinite(holePar)) return "";
+    const relativeToPar = score - holePar;
+    if (relativeToPar <= -2) return "eagle";
+    if (relativeToPar === -1) return "birdie";
+    if (relativeToPar === 1) return "bogey";
+    if (relativeToPar >= 2) return "double-bogey";
+    return "par";
+  }
+
+  function steppedScore(currentScore, par, direction) {
+    if (currentScore === "" || currentScore === null || currentScore === undefined) return Math.max(1, Math.min(20, Number(par) || 1));
+    return Math.max(1, Math.min(20, Number(currentScore) + (Number(direction) < 0 ? -1 : 1)));
+  }
+
+  function isInGame(player) {
+    return player?.inGame !== false;
+  }
+
+  function gamePlayers(players) {
+    return (Array.isArray(players) ? players : []).filter(isInGame);
+  }
+
+  function lowestPlayingHandicap(players, course, settings) {
+    const eligiblePlayers = gamePlayers(players);
+    if (!eligiblePlayers.length) return null;
+    return Math.min(...eligiblePlayers.map((player) => playingHandicap(player.ghin, settings, teeForPlayer(course, player))));
+  }
+
+  function gameHandicap(player, players, course, settings) {
+    const baseline = lowestPlayingHandicap(players, course, settings);
+    if (baseline === null) return 0;
+    const playerHandicap = playingHandicap(player.ghin, settings, teeForPlayer(course, player));
+    return Math.max(0, playerHandicap - baseline);
+  }
+
+  function strokesForPlayerHole(player, players, course, settings, holeIndex) {
+    const hole = holesForPlayer(course, player)[holeIndex];
+    if (!hole) return 0;
+    return Math.min(1, Math.max(0, strokesForHole(gameHandicap(player, players, course, settings), hole.strokeIndex)));
+  }
+
+  function skinStrokesForPlayerHole(player, players, course, settings, holeIndex) {
+    const hole = holesForPlayer(course, player)[holeIndex];
+    if (!hole) return 0;
+    const strokes = strokesForPlayerHole(player, players, course, settings, holeIndex);
+    return hole.par === 3 ? strokes * 0.5 : strokes;
+  }
+
+  function fullHandicapStrokesForPlayerHole(player, course, settings, holeIndex) {
+    const hole = holesForPlayer(course, player)[holeIndex];
+    if (!hole) return 0;
+    const handicap = playingHandicap(player.ghin, settings, teeForPlayer(course, player));
+    return strokesForHole(handicap, hole.strokeIndex);
+  }
+
+  function courseHandicapForPlayer(player, course, settings) {
+    const tee = teeForPlayer(course, player);
+    return courseHandicap(player.ghin, tee.slope, tee.rating, settings?.par ?? course.par);
+  }
+
+  function ghinStrokesForPlayerHole(player, course, settings, holeIndex) {
+    const hole = holesForPlayer(course, player)[holeIndex];
+    if (!hole) return 0;
+    return strokesForHole(courseHandicapForPlayer(player, course, settings), hole.strokeIndex);
+  }
+
+  function ghinMaximumHoleScore(player, course, settings, holeIndex) {
+    const hole = holesForPlayer(course, player)[holeIndex];
+    if (!hole) return null;
+    const handicap = courseHandicapForPlayer(player, course, settings);
+    const strokes = ghinStrokesForPlayerHole(player, course, settings, holeIndex);
+    if (handicap > 54 && strokes >= 4) return hole.par + 5;
+    return Math.max(1, hole.par + 2 + strokes);
+  }
+
+  function ghinAdjustedHoleScore(player, course, settings, holeIndex) {
+    const score = player?.scores?.[holeIndex];
+    if (!Number.isFinite(Number(score)) || Number(score) < 1) return null;
+    return Math.min(Number(score), ghinMaximumHoleScore(player, course, settings, holeIndex));
+  }
+
+  function ghinAdjustedTotal(player, course, settings) {
+    let gross = 0;
+    let completed = true;
+    for (let holeIndex = 0; holeIndex < course.holes.length; holeIndex += 1) {
+      const adjusted = ghinAdjustedHoleScore(player, course, settings, holeIndex);
+      if (adjusted === null) completed = false;
+      else gross += adjusted;
+    }
+    return { gross, completed };
+  }
+
+  function segmentTotals(player, course, settings, start, end) {
+    let gross = 0;
+    let net = 0;
+    let completed = true;
+    for (let i = start; i < end; i += 1) {
+      const score = player.scores[i];
+      if (!Number.isFinite(Number(score)) || Number(score) < 1) {
+        completed = false;
+        continue;
+      }
+      const strokes = fullHandicapStrokesForPlayerHole(player, course, settings, i);
+      gross += Number(score);
+      net += netScore(score, strokes);
+    }
+    return { gross, net, completed };
+  }
+
+  function playerTotals(player, course, settings) {
+    const front = segmentTotals(player, course, settings, 0, 9);
+    const back = segmentTotals(player, course, settings, 9, 18);
+    return {
+      front,
+      back,
+      total: {
+        gross: front.gross + back.gross,
+        net: front.net + back.net,
+        completed: front.completed && back.completed
+      }
+    };
+  }
+
+  function leaders(players, course, settings, segment) {
+    const eligiblePlayers = gamePlayers(players);
+    const entries = eligiblePlayers.map((player) => ({ player, totals: playerTotals(player, course, settings, eligiblePlayers) }));
+    if (!entries.length || entries.some((item) => !item.totals[segment].completed)) return [];
+    const low = Math.min(...entries.map((item) => item.totals[segment].net));
+    return entries.filter((item) => item.totals[segment].net === low).map((item) => item.player.id);
+  }
+
+  function skinResult(players, course, settings, holeIndex) {
+    const eligiblePlayers = gamePlayers(players);
+    if (!eligiblePlayers.length || holeIndex < 0 || holeIndex > 17) return { status: "pending", winnerId: null, lowNet: null };
+    const entries = [];
+    for (const player of eligiblePlayers) {
+      const gross = Number(player.scores[holeIndex]);
+      if (!Number.isFinite(gross) || gross < 1) return { status: "pending", winnerId: null, lowNet: null };
+      const strokes = skinStrokesForPlayerHole(player, eligiblePlayers, course, settings, holeIndex);
+      entries.push({ playerId: player.id, net: netScore(gross, strokes) });
+    }
+    const lowNet = Math.min(...entries.map((entry) => entry.net));
+    const lowPlayers = entries.filter((entry) => entry.net === lowNet);
+    if (lowPlayers.length !== 1) return { status: "tie", winnerId: null, lowNet };
+    return { status: "awarded", winnerId: lowPlayers[0].playerId, lowNet };
+  }
+
+  function skinPendingLeaders(players, course, settings, holeIndex) {
+    const entries = gamePlayers(players).flatMap((player) => {
+      const gross = Number(player.scores?.[holeIndex]);
+      if (!Number.isFinite(gross) || gross < 1) return [];
+      const strokes = skinStrokesForPlayerHole(player, players, course, settings, holeIndex);
+      return [{ playerId: player.id, net: netScore(gross, strokes) }];
+    });
+    if (!entries.length) return [];
+    const lowNet = Math.min(...entries.map((entry) => entry.net));
+    return entries.filter((entry) => entry.net === lowNet).map((entry) => entry.playerId);
+  }
+
+  function kpClaimStatus(player, course, settings, holeIndex, players = [player]) {
+    if (!isInGame(player)) return "none";
+    const hole = holesForPlayer(course, player)[holeIndex];
+    if (!hole) return "none";
+    const key = String(hole.number);
+    const isCurrent = settings.kpWinners?.[key] === player.id;
+    const claimed = isCurrent || (settings.kpClaims?.[key] || []).includes(player.id);
+    if (!claimed) return "none";
+    if (!isCurrent) return "marked";
+    const gross = Number(player.scores?.[holeIndex]);
+    if (!Number.isFinite(gross) || gross < 1) return "pending";
+    if (gross > hole.par) return "marked";
+    const allScoresEntered = gamePlayers(players).every((item) => {
+      const score = Number(item.scores?.[holeIndex]);
+      return Number.isFinite(score) && score >= 1;
+    });
+    return allScoresEntered ? "kp" : "pending";
+  }
+
+  function kpCode(player, players, course, settings, status = "kp") {
+    const target = status === "marked" ? "marked" : "kp";
+    return course.holes
+      .map((hole, holeIndex) => ({ hole, holeIndex }))
+      .filter(({ hole }) => hole.par === 3)
+      .map(({ holeIndex }) => kpClaimStatus(player, course, settings, holeIndex, players) === target ? "1" : "0")
+      .join("");
+  }
+
+  function ticSummary(player, players, course, settings) {
+    const empty = { birdies: 0, eagles: 0, skins: 0, front: 0, frontWeight: 0, back: 0, backWeight: 0, totalNet: 0, totalNetWeight: 0, sandies: 0, kps: 0, kpMarked: 0, total: 0, weightedTics: 0, pointsEarned: 0 };
+    if (!isInGame(player)) return empty;
+    const eligiblePlayers = gamePlayers(players);
+    let birdies = 0;
+    let eagles = 0;
+    let skins = 0;
+    let sandies = 0;
+    let kps = 0;
+    let kpMarked = 0;
+    holesForPlayer(course, player).forEach((hole, i) => {
+      const gross = Number(player.scores[i]);
+      if (gross > 0 && gross <= hole.par - 1) birdies += 1;
+      if (gross > 0 && gross <= hole.par - 2) eagles += 1;
+      if (skinResult(eligiblePlayers, course, settings, i).winnerId === player.id) skins += 1;
+      if (sandyAllowedForHole(course, i) && player.sandies[i] && gross > 0 && gross <= hole.par) sandies += 1;
+      const kpStatus = kpClaimStatus(player, course, settings, i, eligiblePlayers);
+      if (kpStatus === "kp") kps += 1;
+      if (kpStatus === "marked") kpMarked += 1;
+    });
+    const frontLeaders = leaders(eligiblePlayers, course, settings, "front");
+    const backLeaders = leaders(eligiblePlayers, course, settings, "back");
+    const totalLeaders = leaders(eligiblePlayers, course, settings, "total");
+    const front = frontLeaders.includes(player.id) ? 1 : 0;
+    const back = backLeaders.includes(player.id) ? 1 : 0;
+    const totalNet = totalLeaders.includes(player.id) ? 1 : 0;
+    const frontWeight = front ? (frontLeaders.length === 1 ? 2 : 1) : 0;
+    const backWeight = back ? (backLeaders.length === 1 ? 2 : 1) : 0;
+    const totalNetWeight = totalNet ? (totalLeaders.length === 1 ? 2 : 1) : 0;
+    const weightedTics = birdies + eagles + skins + frontWeight + backWeight + totalNetWeight + sandies + kps;
+    return {
+      birdies,
+      eagles,
+      skins,
+      front,
+      frontWeight,
+      back,
+      backWeight,
+      totalNet,
+      totalNetWeight,
+      sandies,
+      kps,
+      kpMarked,
+      total: birdies + skins + front + back + totalNet + sandies + kps,
+      weightedTics,
+      pointsEarned: weightedTics * 0.5
+    };
+  }
+
+  function pointsLedger(player, players, course, settings) {
+    if (!isInGame(player)) return { achievementPoints: 0, positive: 0, negative: 0, net: 0 };
+    const eligiblePlayers = gamePlayers(players);
+    const ownPoints = ticSummary(player, eligiblePlayers, course, settings).pointsEarned;
+    const positive = ownPoints * Math.max(0, eligiblePlayers.length - 1);
+    const losses = eligiblePlayers
+      .filter((other) => other.id !== player.id)
+      .reduce((sum, other) => sum + ticSummary(other, eligiblePlayers, course, settings).pointsEarned, 0);
+    const negative = losses ? -losses : 0;
+    return { achievementPoints: ownPoints, positive, negative, net: positive + negative };
+  }
+
+  function isRoundComplete(players) {
+    const eligiblePlayers = gamePlayers(players);
+    return eligiblePlayers.length > 0 && eligiblePlayers.every((player) => Array.from({ length: 18 }, (_, holeIndex) => Number(player.scores?.[holeIndex])).every((score) => Number.isFinite(score) && score >= 1));
+  }
+
+  function settleNetPoints(value, complete = true) {
+    const points = Number(value) || 0;
+    if (!complete || Number.isInteger(points)) return points;
+    return points > 0 ? Math.ceil(points) : Math.floor(points);
+  }
+
+  function settlePointValues(values, complete = true) {
+    const rawValues = (Array.isArray(values) ? values : []).map((value) => Number(value) || 0);
+    const settledValues = rawValues.map((value) => settleNetPoints(value, complete));
+    if (!complete) return { settledValues, winnersTotal: 0, losersTotal: 0, winnerReduction: 0, tips: 0 };
+
+    const totalWinners = () => Number(settledValues.reduce((sum, value) => sum + Math.max(0, value), 0).toFixed(10));
+    const losersTotal = Number(settledValues.reduce((sum, value) => sum + Math.max(0, -value), 0).toFixed(10));
+    const originalWinnersTotal = totalWinners();
+    let remainingReduction = Math.max(0, Number((originalWinnersTotal - losersTotal).toFixed(10)));
+    const winnerReduction = remainingReduction;
+
+    if (remainingReduction > 0) {
+      const winnerIndexes = settledValues.map((value, index) => ({ value, raw: rawValues[index], index }))
+        .filter((entry) => entry.value > 0)
+        .sort((a, b) => b.value - a.value || b.raw - a.raw || a.index - b.index);
+      winnerIndexes.forEach((entry) => {
+        if (remainingReduction <= 0) return;
+        const deduction = Math.min(settledValues[entry.index], remainingReduction);
+        settledValues[entry.index] = Number((settledValues[entry.index] - deduction).toFixed(10));
+        remainingReduction = Number((remainingReduction - deduction).toFixed(10));
+      });
+    }
+
+    const winnersTotal = totalWinners();
+    const tips = Math.max(0, Number((losersTotal - winnersTotal).toFixed(10)));
+    return { settledValues, winnersTotal, losersTotal, winnerReduction, tips };
+  }
+
+  function pointsRoundingTotals(values, complete = true) {
+    const { winnersTotal, losersTotal, winnerReduction, tips } = settlePointValues(values, complete);
+    return { winnersTotal, losersTotal, winnerReduction, tips };
+  }
+
+  function bccTipsFromNetPoints(values, complete = true) {
+    return pointsRoundingTotals(values, complete).tips;
+  }
+
+  function pointsSettlement(players, course, settings) {
+    const eligiblePlayers = gamePlayers(players);
+    const complete = isRoundComplete(eligiblePlayers);
+    const rawEntries = eligiblePlayers.map((player) => {
+      const ledger = pointsLedger(player, eligiblePlayers, course, settings);
+      return { playerId: player.id, ...ledger };
+    });
+    const settled = settlePointValues(rawEntries.map((entry) => entry.net), complete);
+    const entries = rawEntries.map((entry, index) => {
+      const settledNet = settled.settledValues[index];
+      return { ...entry, settledNet, roundingAdjustment: Number((entry.net - settledNet).toFixed(10)) };
+    });
+    const rounding = {
+      winnersTotal: settled.winnersTotal,
+      losersTotal: settled.losersTotal,
+      totalToCollect: settled.losersTotal,
+      winnerReduction: settled.winnerReduction,
+      tips: settled.tips
+    };
+    return { complete, ...rounding, entries };
+  }
+
+  return {
+    COURSE,
+    normalizeTeeKey,
+    teeForPlayer,
+    holesForPlayer,
+    parseHandicapInput,
+    formatHandicap,
+    courseHandicap,
+    playingHandicap,
+    strokesForHole,
+    netScore,
+    isEagle,
+    isBirdie,
+    sandyAllowedForHole,
+    scoreMark,
+    steppedScore,
+    isInGame,
+    gamePlayers,
+    lowestPlayingHandicap,
+    gameHandicap,
+    strokesForPlayerHole,
+    skinStrokesForPlayerHole,
+    fullHandicapStrokesForPlayerHole,
+    courseHandicapForPlayer,
+    ghinStrokesForPlayerHole,
+    ghinMaximumHoleScore,
+    ghinAdjustedHoleScore,
+    ghinAdjustedTotal,
+    segmentTotals,
+    playerTotals,
+    leaders,
+    skinResult,
+    skinPendingLeaders,
+    kpClaimStatus,
+    kpCode,
+    ticSummary,
+    pointsLedger,
+    isRoundComplete,
+    settleNetPoints,
+    settlePointValues,
+    pointsRoundingTotals,
+    bccTipsFromNetPoints,
+    pointsSettlement
+  };
+});

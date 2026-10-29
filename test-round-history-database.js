@@ -1,0 +1,41 @@
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const RoundHistoryDatabase = require("./round-history-database.js");
+const R = require("./round-state.js");
+
+const directory = fs.mkdtempSync(path.join(os.tmpdir(), "berry-creek-rounds-"));
+const database = new RoundHistoryDatabase(path.join(directory, "rounds.sqlite"));
+let state = R.defaultState();
+state.roundName = "History Test";
+state.date = "2026-09-02";
+const incompleteState = R.applyAction(state, { type: "ADD_PLAYER", payload: { player: { id: "incomplete", name: "Incomplete Golfer", group: "A" } } });
+assert.throws(() => database.create(incompleteState), /Complete every player's 18-hole scorecard/);
+const preservedIncomplete = database.create(incompleteState, { allowIncomplete: true });
+assert.equal(preservedIncomplete.completed, false);
+assert.equal(preservedIncomplete.changeCount, incompleteState.auditLog.length);
+assert.equal(preservedIncomplete.state.auditLog.at(-1).detail, "Added Incomplete Golfer to Group A");
+database.remove(preservedIncomplete.id);
+state = R.applyAction(state, { type: "ADD_PLAYER", payload: { player: { id: "p1", name: "Test Golfer", group: "A", scores: Array(18).fill(4) } } });
+state = R.applyAction(state, { type: "ADD_HOLE_COMMENT", payload: { comment: { id: "history-comment", hole: 9, text: "Saved with the round.", authorAccountId: "history-account", authorName: "Test Golfer", authorGroup: "A", createdAt: "2026-10-10T14:00:00.000Z" } } });
+
+const saved = database.create(state);
+assert.equal(saved.roundName, "History Test");
+assert.equal(saved.roundId, state.roundId);
+assert.equal(saved.playerCount, 1);
+assert.equal(saved.completed, true);
+assert.equal(saved.changeCount, state.auditLog.length);
+assert.equal(saved.state.players[0].scores.length, 18);
+assert.equal(saved.state.holeComments[0].text, "Saved with the round.");
+assert.equal(database.list().length, 1);
+assert.equal(database.list()[0].roundId, state.roundId);
+assert.equal(database.find(saved.id).state.players[0].name, "Test Golfer");
+assert.equal(database.latest().id, saved.id);
+assert.equal(database.remove(saved.id).id, saved.id);
+assert.equal(database.list().length, 0);
+assert.equal(database.latest(), null);
+
+database.close();
+fs.rmSync(directory, { recursive: true, force: true });
+console.log("All round history database tests passed.");

@@ -1,29 +1,175 @@
-# Berry Creek GPS v0.2.0 — Illustrated Course Map for iPad
+# Berry Creek DH Game
 
-**Entirely separate from the Berry Creek DH Game.** Deploy to the existing Berry Creek GPS repository/service only. Do not upload files to the DH Game repository.
+Version 9.26.3 makes manual handicap changes fully accountable. The change history now identifies the acting admin, timestamp, player, and the old and new handicap—including accidental use of the **+ HCP** control—while unchanged values do not create noise. Scheduled roster index updates remain summarized as scheduled updates rather than being mistaken for manual edits.
 
-## New: Course Art toggle, real golf hole shapes
+Version 9.26.2 restores account access in the stable Android header. Android users now see a compact **Login** or **Logout** control that preserves the fixed banner height, includes the signed-in player's name in its accessible label, and remains hidden only on view-only spectator links.
 
-Tap **Course Art** on the map toolbar to switch from satellite imagery to an illustrated map with green fairways, bright greens, tan bunkers, and blue water. Shapes are geographic overlays, so GPS markers, scoring, and measurements stay aligned.
+Version 9.26.1 stabilizes the compact banner on Android phones. Android now uses a fixed-height compact header, ignores browser-toolbar resize noise when selecting the header mode, and removes GPU-heavy blur from sticky mobile controls. Other mobile devices retain the scrolling compact-header behavior with a short stability delay.
 
-- On first use, the app *attempts* to retrieve mapped golf course outlines from **OpenStreetMap's Overpass API**. Available data vary and require an internet connection; there is no guarantee that all holes/features are mapped. OSM data are licensed ODbL; attribute OpenStreetMap and follow applicable use terms.
-- If the illustrated map is missing a fairway or bunker, use **Draw Hole**. Choose a feature type, then tap its corners **on the satellite image**, press Save Shape. Return to Course Art to view the traced feature. **No invented hole shapes are bundled.**
-- You can draw fairways, greens, bunkers, water, tee boxes, and rough for each hole. Each shape is saved to this iPad's browser storage. Use Draw Hole → **Export Drawings JSON** to back up and share between iPads. **Import Drawings JSON** replaces the current local custom drawings. This differs from the existing Round Menu → Export/Import Green Points JSON, which holds actual front/center/back distance reference points.
-- The selected hole's custom drawings are shown over the community geometry. Course Art includes a legend and displays number of custom outlines for the hole. On initial use with incomplete mapped outlines, you may only see the topographic base map; map the silhouettes by tracing.
-- Marker animations and moving distance guides carry over from v0.1.2.
+Version 9.25.0 stabilizes the compact mobile header near the top scroll boundary. Separate enter and exit thresholds prevent the header from rapidly toggling when its height changes, header-height measurement no longer re-runs compact-state decisions, and size-changing transitions were removed to prevent intermediate layout jumps.
 
-## Installation on Render
+Version 9.24.0 replaces the Berry Creek poppy in printed results with the supplied DH golfer artwork used by the app icon and banner. The updated square treatment appears on both live and historical-round print reports.
 
-Recommended: an independent Render **Static Site** pointed at a GitHub repo whose root contains `index.html`, `app.js`, `styles.css`, `icon.svg`, `sw.js`, `manifest.webmanifest` etc. Use build command `echo "Static files ready"` and publish directory `.`. Existing **Web Service** deployments continue to work with `node server.js` since `server.js` and `package.json` are included.
+Version 9.23.0 adds **Print results** to every entry in the Saved Rounds Archive. Admins can print an individual historical round directly from its archive card or from the saved-round results dialog. The report uses that archived round's leaderboard, KP and skin results, group scorecards, settlement totals, and hole comments without loading it into—or changing—the active round.
 
-For an existing Berry Creek GPS Render deployment, extract this ZIP, replace the app files in the Berry Creek GPS GitHub repo root, commit, and redeploy. Open from iPad Home Screen in landscape after update. Because a service worker caches the shell, do a reload if seeing the old button.
+Version 9.22.0 moves saved-player group assignment controls beside **Search by name** on the Players tab. Search for a golfer, select their roster card, choose the destination group, and add them from the compact top row; group controls no longer repeat at the bottom of every card. A single filtered search result is selected automatically, and existing duplicate-player, group-capacity, and round-lock safeguards remain in place.
 
-## Important limitations
+Version 9.21.0 moves hole comments into a dedicated **Comments** tab, removing the entire comments block from the Scoring page. Players can select any hole without changing the scorekeeper's active scoring hole, browse stories from every group, and—when signed in—post or remove their own comments. Admins retain moderation access, photo-email actions follow the selected comments hole, and the phone navigation now accommodates five primary tabs.
 
-This is **not yet a verified, course-wide Garmin-equivalent map**. Actual outlines depend on community map features and manually traced geometry. Unmapped hazards are not shown and should not be assumed absent. Front/center/back green positions still must be calibrated for GPS yardages. **Do not use unverified coordinates or map measurements to make safety decisions near water or hazards.** Traced outlines and OpenStreetMap data are not survey grade. A source-verified proprietary aerial layout is not included.
+Version 9.20.1 reduces the vertical height of each phone scoring card by approximately 15 percent. It also tightens the spacing between player cards and compacts the group selector, hole navigation, status line, and hole banner so more of a five-player group remains visible without scrolling. Score, SD, KP, Match Net, automatic tic indicators, and touch feedback remain available.
 
-Live maps and the Leaflet mapping library require internet connectivity (unless you separately license and implement offline tiles). A GPS-equipped iPad and location permission are recommended; iPads with Wi‑Fi-only location may be inaccurate. Existing scorekeeper data remain local on this iPad and are not synced to other users. Back up rounds and drawings before clearing browser data.
+Version 9.20.0 adds round comments to completed-round reporting. Printed or PDF results now include a dedicated Hole Comments section grouped by hole with the commenter, group, timestamp, and story. Downloaded result spreadsheets append the same comments below the scoring and settlement results. Because comments already travel with saved rounds, historical reports include their original comments as well.
 
-Map sources: OpenStreetMap contributors (Open Database License), Esri (satellite/topographic imagery; provider-specific terms), The Club at Berry Creek's public course information (https://www.theclubatberrycreek.com/golf).
+Version 9.19.1 keeps each player's Match Net box on the same row as the compact SD and KP controls on phones. The older mobile hole-summary rule is now scoped to that summary only, eliminating the unintended empty second row in every scoring card.
 
-See `RENDER_DEPLOYMENT.md` for Render details.
+Version 9.19.0 makes each Scoring-page player card substantially more compact for five-player groups on phones. Redundant Group and Saved/Missing labels are removed, automatic birdie/eagle, skin, and KP-status indicators move beside the player name, and Score, SD, KP, and Match Net now share one concise control row. Saved, pending, missing, and error states remain visible through the card's colored edge and touch feedback.
+
+Version 9.18.0 adds a sortable **GHIN** leaderboard column between TOT and NET. It displays the player's adjusted gross score for handicap posting by capping each completed hole at net double bogey using the selected tee's Course Handicap and the standard Upper hole handicap ratings. Plus handicaps and the USGA Course Handicap-above-54 exception are handled automatically. The value is also included in saved-round results, printed leaderboards, and downloaded spreadsheets, without changing the DH Game's actual gross, net, skins, tics, or points calculations.
+
+Version 9.17.3 makes **Send with Gmail** prefer the installed Gmail app on iPhone, iPad, and Android. The recipient, subject, and message are passed directly to Gmail; if Gmail is unavailable, the app falls back to Gmail's browser composer.
+
+Version 9.17.2 adds a dedicated **Send with Gmail** option for hole photos. It opens a pre-addressed Gmail draft with the round, date, hole, and viewed group filled in, while preserving the original default-email option.
+
+Version 9.17.1 keeps the selected hole's shared comments visible directly on the Scoring page, independent of the expandable group scorecard. The section also invites players to share hole stories that may appear in the Gazette.
+
+Version 9.17.0 completes the next phone-first aesthetic phase. A live-round identity strip keeps the round, date, selected group or view, and lock state visible; wide scorecards and leaderboards show swipe cues and keep their headings and player names in view. Group status uses compact 18-hole progress rings, scoring cards visibly distinguish saved, pending, missing, and failed entries, and important confirmation windows now use clearer hierarchy and action-specific styling. Matching SVG icons and refined typography replace the remaining inconsistent action symbols without changing scoring rules or saved data.
+
+Admins can configure one photo email address in Settings. When it is set, the always-visible Hole Comments section on the Scoring page offers both **Email a photo for Hole X** and **Send with Gmail**. Each option opens a pre-addressed draft with the round, date, group being viewed, and hole already identified; the sender only needs to attach the photo. The address remains configured when scores are reset, a saved roster is reused, or a new round is started, and no image files are stored by the app.
+
+THRU now reserves `F` for a player whose complete 18-hole scorecard is present. A player who reaches Hole 18 with any earlier score missing displays `18` instead. Once a group moves beyond a missing score, its active scorekeeper sees a persistent reminder naming each affected player and hole on the scoring page and in the phone's sticky scoring controls until the gaps are corrected.
+
+Signed-in players and admins can post a shared comment for any hole directly on the Scoring page. Hole comments display the author's name, group, and posting time for every group in real time. Players may remove their own comments, admins may remove any comment, and comments become view-only when the round is locked. Comments are included in saved rounds, complete backups, and server snapshots, and are cleared when a new round or score reset begins.
+
+Event Readiness now includes a persistent Last index update indicator for both automatic and manual index updates. It reports the completion time in Central Time, the administrator or automatic schedule responsible, the sheet roster date, how many indexes changed, and how many were already current. The player-login readiness warning also lists every assigned player missing usable credentials by name.
+
+Active Round export/import has been removed from Settings and from the round action engine. Complete Backup is the supported whole-app recovery method, while Saved Rounds Archive preserves completed events for reference, download, or roster reuse.
+
+Event Readiness now focuses on storage, persistence, roster, player access, and current snapshot protection. Completed one-time admin and HTTPS checks are hidden; unresolved versions still appear. The private session-secret check is available inside collapsed System Details, automatic-index warnings appear beside Update Indexes only when attention is required, and scorekeeper assignments are shown on the Live Event Status group cards.
+
+On phones, the Scoring page now keeps Previous, Hole, and Next controls in a safe-area-aware dock at the bottom of the screen. The top banner and navigation stay visible and collapse to a compact DH Game header after scrolling. Score saves pulse the player card with a visible status, Sandy/KP/scorekeeper changes show a short confirmation, conflicting edits identify whether the server score was kept or replaced, and touch controls visibly depress when tapped.
+
+The installable home-screen icon and the in-app banner both use the original supplied golfing-character artwork without added text or other visual changes. The master banner image remains byte-for-byte identical to the supplied PNG; only proportional size copies are created for platform-required phone and browser icons. Versioned image URLs ensure browsers request the current artwork after an update; an iPhone that still shows an older installed icon may need the old home-screen shortcut removed and added again.
+
+The leaderboard includes a sortable THRU column between G and TOT. It reports the number of holes entered and displays F after all 18 scores are complete. The app footer contains a Help Documentation link on every view.
+
+A responsive, real-time golf scoring app configured from The Club at Berry Creek's current scorecard.
+
+When installed on an iPhone or Android Home Screen, the app is labeled `DH Game` beneath the icon.
+
+## Start the app
+
+No third-party packages are required. Install Node.js 22.5 or newer, open a terminal in this folder, and run:
+
+```bash
+npm start
+```
+
+Open `http://localhost:8080`. Other scorekeepers on the same Wi-Fi network can open `http://YOUR-COMPUTER-IP:8080`.
+
+For a hosted event, deploy this folder to any service that runs a persistent Node.js process and provides persistent disk storage. Set `PORT` if the host requires it. On Render, attach a persistent disk at `/var/data`, then set `PLAYERS_DB_FILE` to `/var/data/players.sqlite`. The app automatically stores the active round and historical-round database beside that file so all data survives redeploys and restarts. Set `AUTH_SECRET` to a long, random, stable value so signed login sessions remain valid and private across restarts.
+
+## User accounts and access
+
+Admins and players sign in from the same button with a unique username and private 4–10 digit PIN. PINs are salted and hashed before storage and are never returned by the server. A signed session is remembered on that device for up to 30 days. The main website remains publicly readable, so anyone can browse group scorecards and the live leaderboard without signing in.
+
+Admin-only controls protect the roster, handicaps, recovery tools, account setup, and final round lock. Change History records the name of the admin responsible for every administrative action. Players can browse every group but cannot change the roster or event settings.
+
+On the first launch, use username `admin` with the existing `ADMIN_PIN` environment value, then open **Settings → Admin access** and create the first named administrator. The setup PIN is disabled as soon as that account is created. Existing named admins upgrading from an earlier release may leave Username blank once and sign in with their existing private PIN; their generated username is then visible under Admin access.
+
+Additional administrators create their own credentials privately. A signed-in admin selects **Create private setup link** and sends the single-use link to the new administrator. The link expires after 24 hours. The recipient enters their GHIN-matching name and private PIN over the hosted HTTPS connection; the app assigns the login as `first.last`, and the inviting admin never sees the PIN.
+
+An administrator who also plays can use the same credentials for both roles. In **Settings → Named accountability**, choose that administrator's saved profile under **Linked player** and save the change. The saved player's GHIN name becomes the account name and automatically determines the `first.last` username. Later edits to that single Settings name field update the linked saved-player name and login together. The link is one-to-one: an admin can have one saved-player profile, and a saved-player profile can belong to only one admin. Linking retires any separate player-only login and unused setup links for that profile. The combined account keeps full admin rights, opens the player's assigned group by default, and can be selected as that group's scorekeeper. Unlinking does not recreate the retired player login; create a new private player setup link only if separate access is later needed.
+
+Every saved player creates their private PIN through a single-use setup link that expires after 24 hours. The app assigns the username from the saved name in `first.last` form and shows it as read-only; if that username is already used, a number is appended. The admin never sees the player's PIN. A saved player without a completed login shows **Create login link**. An existing account shows **Create reset link**; its username stays the same and its current credentials continue working until the player accepts the reset link. Creating another link invalidates any older unused link for that player. Guests receive an automatic round-only username and the default PIN `1234` when added and may use them only during that active round.
+
+The normal website opens on the Scoring page. After a player signs in, it defaults to that player's current group; a player not assigned to the active round starts on Group A. Everyone may use the group selector to browse. The Leaderboard tab is public and always shows the active round when it has players. After the active roster is cleared, it automatically shows the most recently saved round as read-only historical results. Each scoring card has an `SK` checkbox. If a group has no scorekeeper, any signed-in member of that group may choose one of its players. Once selected, only that scorekeeper or an admin may replace or clear the selection. At most one player can be selected per group, and only that account can enter the group's scores. Admins can enter scores and manage scorekeepers for every group.
+
+## Saved player database
+
+The Players tab includes an admin-only reusable player database. It opens with Search by name and the saved roster. The top Add Player button reveals a form at the bottom and saves the golfer's GHIN-matching name, GHIN Index, and preferred tee, then prepares their private login setup link; Add Guest reveals a matching bottom form with an added group selection for a one-round player who is not saved. A saved-player entry is rejected unless all three required fields contain valid information. Every editable handicap field includes a `+ HCP` toggle so better-than-scratch indexes can be entered from Android and iPhone decimal keyboards without typing a plus sign. Tee choices are `Championship/Gold/1`, `Member/Blue/2`, `Combo/23`, and `Creek/White/3`. The tee-adjusted HDCP is displayed immediately to the right of the GHIN Index and updates with the selected tee and event allowance. Editing a saved player's GHIN Index, name, or tee also updates their linked entry in the active round. The setup link displays the assigned username as read-only and lets only the player create or reset the private PIN.
+
+An unlocked admin can select **Update Indexes** to update every matched saved player from the published Google Sheet. The importer supports the sheet's current repeating Name / Club / Index layout, including its `=+0.2` style for plus indexes. It also supports a conventional table with `Player Name`/`Name` plus `GHIN Index`/`Handicap Index` columns, or separate `First Name` and `Last Name` columns. Matching is case-insensitive and exact after normalizing punctuation and spacing; `Last, First` sheet names also match `First Last` saved names. The report shows updated, already-current, not-found, and ambiguous players. Incomplete or malformed sheet rows are ignored rather than shown as an Invalid category. Plus indexes such as `+4.2` are imported with the correct better-than-scratch direction. Linked players already in the open active round receive the new index without changing their group or scores.
+
+The server also checks the published roster automatically every day at **6:30 AM America/Chicago**, including daylight-saving changes. It performs a catch-up check after a restart if that day's scheduled time has already passed, and retries temporary download failures after 15 minutes. A current sheet updates the reusable player database and any unlocked active round. A locked active round remains unchanged. An outdated or missing sheet date is never imported automatically; the warning appears beside Update Indexes and the skipped check appears in Change History. Set `AUTO_INDEX_UPDATE_ENABLED=false` only when the daily job needs to be disabled.
+
+The sheet must also label an **Update Date** (supported labels include `Update Date`, `Last Updated`, and `As Of`). Before writing, the server compares that date with the current date in Central Time. A missing or non-current date produces the warning “Are you sure you want to update, the roster is outdated.” Cancel leaves the database untouched; confirming proceeds. Every actual bulk change first creates a server recovery snapshot and records the admin's name, number of updated players, and sheet date in Change History. Set `INDEX_SHEET_URL` only if the published CSV source changes; otherwise the provided Berry Creek sheet is used automatically.
+
+The guest-entry form in the database panel creates a one-time, independent player for the active round. A GHIN-matching name, Handicap Index, tee, and group are required. The app assigns a `first.last` username and PIN `1234`; repeated names receive a numeric username suffix. Guests are not saved to the reusable roster, may be entered repeatedly in different groups, and display `*G` beside their names on the leaderboard. Their login expires when a new round begins.
+
+Enter and display better-than-scratch indexes using standard golf notation, such as `+4.2`. The app stores the value internally in the direction required for stroke calculations, so existing players previously entered as `-4.2` automatically display as `+4.2` after this update.
+
+Deleting a saved player does not delete that golfer's current-round scores. It only removes the reusable database record. A profile linked to an administrator must be unlinked under Admin access before it can be deleted.
+
+## Event workflow
+
+1. Sign in as an admin, save or update golfers in the player database, and send each non-admin golfer their private login setup link. For an admin who is also playing, select their saved profile under **Settings → Admin access → Linked player** instead.
+2. Add saved golfers to Groups A-F, use **Add player** for a one-time entry, or submit **Add guest** for an independent guest entry. The round supports up to 30 players, each group is limited to five, and the same saved player cannot be assigned to more than one active group.
+3. Send everyone the normal website address. Players sign in, and the app opens their assigned group automatically. No scoring or special leaderboard link is required.
+4. If an admin has not selected a scorekeeper, any signed-in member of that group checks `SK` beside the chosen player. That scorekeeper enters all five gross scores for the current hole and marks sand saves and par-3 KPs.
+5. Everyone can view the live Leaderboard. A new KP claim on the same hole automatically replaces the previous holder while retaining the earlier player's scorecard mark.
+6. Use Show group scorecard at the bottom of the scoring page to open the group's live-updating scorecard. Out, In, and Total show gross/full-handicap net; incomplete totals are red and final totals are black. The scorecard uses S for skins, KP for the qualifying holder, KPM for marked claims that earned no tic, and an outlined KP while the result is pending.
+7. Select **Lock & Save Round** when every player's 18-hole scorecard is complete. The app identifies any unusual scores by player, hole, score, and par before it locks and saves the historical snapshot. Only an admin can unlock it.
+8. A separate **Save Round** option remains available only after every player has all 18 scores; incomplete rounds cannot be saved.
+9. Before play, open Event readiness in Settings, run the checks, and create a current server snapshot.
+
+## Handicap and tic rules
+
+- **Guest:** a one-time player with a manually entered Handicap Index. Guests compete normally, display `*G` on the leaderboard, are not saved to the reusable database, and may be entered independently more than once.
+- **Not in the game:** the player's gross and net scores remain on the group scorecard, but the player is excluded from the leaderboard, KPs, skins, tics, segment/overall awards, and points calculations.
+
+- Course Handicap = Handicap Index x (Slope / 113) + (Course Rating - Par), rounded.
+- Playing Handicap = Course Handicap x the event allowance, rounded.
+- Match strokes are based on the difference between each competing player's tee-adjusted Playing Handicap and the lowest tee-adjusted Playing Handicap among all players currently in the game across every group. Players marked Not in game do not establish the match baseline.
+- Match strokes use the standard Upper hole handicap sequence for every player, regardless of tee selection, and are capped at one stroke per hole. Live, printed, JPEG, and PDF scorecards therefore show no more than one match-stroke dot on any hole.
+- Birdie tics are automatic for gross birdies or better.
+- Front, back, and total net tics are automatic once the relevant holes are complete. FN, BN, and TN use each player's entire tee-adjusted Playing Handicap independently of the game-wide low-handicap baseline, with no handicap or stroke cap. Full strokes—including full par-3 strokes—are distributed using the standard Upper hole handicap sequence for every tee. The leaderboard labels them FN, BN, and TN. An outright winner receives 2 tics; in any tie involving two or more leaders, every qualifying tied player receives 1 tic.
+- Net skins are automatic after every competing player across all groups has a score for the hole. The single lowest handicap-adjusted net score wins; a tie awards no skin. On par 3s only, every allocated stroke counts as one-half stroke for the skin comparison (full strokes still apply to all other net calculations).
+- While a hole is incomplete, one current low score is shown as **Skin Pending**. If multiple entered scores are tied for the current low, the scoring banner shows **Skin: No skin (yet)** until the remaining scores are entered.
+- A marked sand save at par or better earns one Sandy tic. A Sandy birdie also earns its separate birdie tic.
+- Sand Save is available only after a par-or-better gross score and is not offered on Holes 4 or 12 because those holes have no bunkers. Changing a qualifying score to bogey or worse automatically clears the sand save.
+- Group scorecards use traditional score shapes: birdies are circled, eagles or better are double-circled, bogeys are squared, and double bogeys or worse are double-squared.
+- The selected group's live scorecard can be exported as a high-resolution JPEG or PDF styled after the club's physical card, including front/back panels, par, handicap, tee yardages, gross/net totals, handicap dots, score shapes, and all three KP categories.
+- KPs can be marked during play on holes 2, 8, 12, and 17. Each group retains its checked KP claim, while correcting the selected player within the same group replaces that group's mistaken claim. The latest qualifying claim remains **KP Pending** until all competing scores are entered on the hole, then earns 1 tic as **KP**. Earlier, corrected, or over-par claims are **KP Marked** and earn 0 tics. A player cannot be marked for both KP and a sandy on the same par 3.
+- The leaderboard KP column is a simple count of KPs won. KPM is not a leaderboard column; each par-3 KP card lists `KPM: <names>` beneath its latest-claim dropdown for players who marked that KP but did not win it.
+- On a blank score, the first tap of either score arrow enters par. Additional taps then decrease or increase the score in the arrow's direction.
+- Entering a new eagle score plays a locally stored, original 2.9-second eagle call on the scorekeeper's device. The call is bundled for offline play and does not stream or copy audio from YouTube.
+- Entering a new birdie score plays a short original two-note tweet sound on the scorekeeper's device.
+
+## Settings and admin controls
+
+- Settings begins with the frequently used event controls in this order: Device preferences, Start a new round, Lock & Save Round, and Save Round. Event readiness and Live event status follow. Historical reference, Named accountability, and Change history are grouped below for less frequent access; complete backup and version tools remain available inside Historical reference. Saved rounds are collected in a collapsed Saved Rounds Archive so the Settings page stays compact; opening the archive reveals the existing view, roster reuse, download, and delete actions.
+- The connection badge shows Live, Reconnecting, or Offline. Offline score changes are queued on the device and sent when the connection returns.
+- Each score briefly shows Saving, Saved, Waiting to sync, or Sync problem so the scorekeeper can verify that entry.
+- Score updates include the score the device last saw. If another device changed the same player and hole first, the scorekeeper must choose whether to keep the server score or replace it, preventing silent overwrites.
+- Scorekeeper and admin permissions are enforced by the server; hiding or enabling a browser control cannot grant access.
+- Once every score on a hole is entered, a large Continue to next hole button appears. Automatic advance can also be enabled per device.
+- The Group progress dashboard shows players, completed holes, missing scores, last scoring activity, and connected scorekeepers for every group.
+- Missing names, duplicate names, incomplete holes, and unusually high or low scores produce warnings.
+- Every score, KP, sand save, roster edit, reset, restore, and lock change is recorded in Change history.
+- Named admin actions—including player-database changes, saved-round changes, backups, and account management—are attributed to the signed-in administrator.
+- Results can be printed or saved as PDF, downloaded as a spreadsheet-compatible CSV, or backed up as JSON.
+- The Settings tab can save durable historical snapshots containing the full roster, scorecards, tics, KPs, and results. Saved rounds can be viewed, downloaded, reused as a clean roster for a new round, or deleted without changing the active round.
+- Saved-round group scorecards can be exported individually as JPEGs or PDFs, together as JPEGs in one ZIP file, or together as a multi-page PDF.
+- The normal website provides public, read-only group browsing and a leaderboard without requiring a separate viewing link. The Leaderboard tab displays the active round live, then falls back to the newest saved round after the active event is cleared. Signing in activates only the controls allowed for that account, so separate scoring and leaderboard links are no longer necessary.
+- Lock & Save Round opens a checklist for missing scores, KPs, unusual scores, and roster-name issues. Unusual entries identify the player, hole, score, and par. A round with missing scores cannot be locked and saved.
+- Celebration sounds can be muted per device. Normal, outdoor high-contrast, and dark display modes are also device-specific.
+- The visible app version, automatic startup check, and update banner make cached versions easier to identify and replace without a separate manual check button.
+- Event readiness checks storage write access, persistent-disk configuration, the session secret, admin setup, player logins, group scorekeepers, backup freshness, roster setup, database access, and secure hosting.
+- Complete backup files contain the active event, reusable player database, hashed player-login credentials, temporary active-round guest logins, and every saved historical round. Pending single-use invitation links are intentionally excluded and can be recreated afterward. A restore first creates a server-side recovery snapshot of the current data.
+- Group QR images require an internet connection; Copy link remains available if the QR image service is unavailable.
+- Live and printed scorecards show the game-relative skin pop. Skin pops are capped at one stroke per hole and count as 1/2 on par 3s; Out, In, and Total net scores continue to use each player's full handicap without that cap.
+- The leaderboard uses points: ordinary tics are worth 0.5 point; eagles and outright front/back/total net wins are worth 1 point; tied net wins are worth 0.5 point.
+- FN is not awarded until every competing player across all groups has completed holes 1-9. BN waits for every competing player to complete holes 10-18, and TN waits for every competing player to complete all 18 holes. Players marked Not in the game do not delay these awards.
+- Every leaderboard column is sortable in either direction. Use Reset sort to return to the live standings order.
+- The player with the highest positive Net points is marked with the Berry Creek flower, while the player with the lowest negative Net points is marked with a 💩. Only one player can receive each marker. Total Net breaks a points tie: lower Total Net earns the flower, while higher Total Net receives the 💩. If Points and Total Net are both tied, that icon is not awarded. No marker appears while every player is at zero, and the markers continue to follow points even when the table is sorted by another column.
+- On supported phones, displaying the Leaderboard in landscape requests a screen wake lock so the display does not dim or auto-lock. The lock is released when the user leaves the Leaderboard, rotates to portrait, hides the app, or closes the page; the operating system may still decline or revoke it under low-power conditions.
+- The live leaderboard uses the compact order `PLAYER, HCP, G, TOT, NET, E, B, SD, KP, S, FN, BN, TN, $+, $-, Net $` and includes a collapsible legend beneath the table. `$+` shows the amount earned, `$-` shows the amount owed for tics earned by others, and `Net $` shows the combined balance. All non-player columns use one compact 3rem width, the Player column remains wide enough for names, and the table has no vertical dividers. TN displays the existing Total Net award: 2 tics for a sole winner or 1 tic for every tied winner.
+- Once every competing player has all 18 scores, fractional Net $ amounts round away from zero: +1.5 becomes +2 and −1.5 becomes −2. If the settled losses exceed the settled winnings, the difference is recorded as BCCC Tips. If winnings exceed losses, the difference is deducted from the largest winner so the final ledger balances to zero.
+- After the round is complete, **Total to Collect** appears immediately to the left of **BCCC Tips** and equals the absolute sum of every player's rounded negative Net points.
+- The finalized settlement row reserves three compact columns for each label and keeps two empty columns on the right, shifting Total to Collect and BCCC Tips left so the labels never overlap in the compact leaderboard.
+
+Under Settings, **Start new round** clears the active roster, group assignments, scores, KPs, and tics, then returns the admin to Players and Groups to build the next event. A locked-and-saved round starts the next round immediately; otherwise the app warns that the current data will be lost and requires Continue. Saved players and historical saved rounds are not deleted.
+
+The Reset button on the Players tab can also clear only scores and tics while keeping the active roster, or clear the entire active event.
+
+By default, the server saves event data to `data/round.json`, the reusable player roster, player logins, and short-lived player invitations to `data/players.sqlite`, historical rounds to `data/rounds.sqlite`, named admin credentials to `data/admins.sqlite`, and automatic recovery snapshots to `data/backups`. If `PLAYERS_DB_FILE` points to persistent storage, the other files are placed in that same directory. `DATA_DIR`, `ROUND_FILE`, `ROUND_HISTORY_DB_FILE`, `ADMIN_DB_FILE`, and `BACKUP_DIR` can override those locations. Keep every database on persistent storage so user access survives redeploys. For security, downloadable complete backups include only salted player PIN hashes, exclude pending invitation links, and intentionally exclude admin PIN hashes. The server keeps the 25 newest round-data snapshots and automatically creates one before a round reset, score reset, saved-roster reuse, complete restore, or saved player/round deletion.

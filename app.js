@@ -1,559 +1,2957 @@
-/* Berry Creek GPS • independent prototype • no connection to DH Game */
-(() => {
-  'use strict';
-  const STORAGE = 'bc-gps-2026-prototype-round-v1';
-  const MARKERS_STORAGE = 'bc-gps-2026-green-markers-v1';
-  const HISTORY_STORAGE = 'bc-gps-2026-round-history-v1';
-  const MAP_STYLE_STORAGE = 'bc-gps-map-style-v1';
-  const ART_STORAGE = 'bc-gps-course-art-v1';
-  const OSM_CACHE_STORAGE = 'bc-gps-osm-shapes-v1';
-  // Course clubhouse approximate published location, NOT green coordinates.
-  const CLUBHOUSE = [30.706445, -97.670818];
-  // Working copy from a public Berry Creek card (18Birdies/FreeGolfTracker);
-  // verify against the current paper card before treating as authoritative.
-  const pars = [4,3,5,4,4,4,5,3,4,4,5,3,5,4,4,4,3,4];
-  const handicaps = [11,17,1,5,15,3,7,13,9,12,2,18,4,14,10,8,16,6];
-  const yardages = {
-    gold:[373,172,548,436,321,457,544,175,326,374,529,181,547,308,334,385,169,421],
-    blue:[342,164,502,414,278,421,506,159,316,368,503,161,508,271,298,341,153,399],
-    combo:Array(18).fill(null), // combo yards require current club card
-    white:[288,152,450,346,260,385,454,134,231,312,475,135,473,256,280,328,148,362]
-  };
-  const teeName = {gold:'GOLD / 1',blue:'BLUE / 2',combo:'COMBO / 23',white:'WHITE / 3'};
-  const $ = id => document.getElementById(id);
+(function () {
+  "use strict";
+  const E = window.BerryCreekScoring;
+  const R = window.BerryCreekRoundState;
+  const L = window.BerryCreekLeaderboardSort;
+  const X = window.BerryCreekScorecardExport;
+  const APP_VERSION = "9.26.3";
+  const STORAGE_KEY = "berry-creek-tics-v2";
+  const QUEUE_KEY = "berry-creek-pending-actions-v1";
+  const PREFS_KEY = "berry-creek-device-prefs-v1";
+  const SESSION_KEY = "berry-creek-user-session-v1";
+  const HEADER_COMPACT_ENTER_Y = 112;
+  const HEADER_COMPACT_EXIT_Y = 32;
+  const HEADER_MODE_SETTLE_MS = 120;
+  const MOBILE_HEADER_MEDIA = window.matchMedia("(max-width: 760px)");
+  const IS_ANDROID = /Android/i.test(navigator.userAgent || "") || navigator.userAgentData?.platform === "Android";
+  const KP_HOLES = [2, 8, 12, 17];
+  const LEADERBOARD_COLUMNS = [
+    { key: "player", label: "PLAYER", description: "Player name. *G identifies a guest.", firstDirection: "asc", text: true },
+    { key: "handicap", label: "HCP", description: "Playing Handicap for the selected tee.", firstDirection: "asc" },
+    { key: "group", label: "G", description: "Group.", firstDirection: "asc", text: true },
+    { key: "thru", label: "THRU", description: "Holes completed. F means all 18 holes are finished.", firstDirection: "desc" },
+    { key: "gross", label: "TOT", description: "Total gross score.", firstDirection: "asc" },
+    { key: "ghinAdjusted", label: "GHIN", description: "Adjusted gross score for handicap posting. Each hole is capped at net double bogey using the player's Course Handicap.", firstDirection: "asc" },
+    { key: "net", label: "NET", description: "Net score using the player's full Playing Handicap.", firstDirection: "asc" },
+    { key: "eagles", label: "E", description: "Eagles or better. Each earns 2 tics.", firstDirection: "desc" },
+    { key: "birdies", label: "B", description: "Birdies. Each birdie earns 1 tic.", firstDirection: "desc" },
+    { key: "sandies", label: "SD", description: "Sandies. Each qualifying sand save earns 1 tic.", firstDirection: "desc" },
+    { key: "kps", label: "KP", description: "Closest to the pin. This is the number of KPs won; each earns 1 tic.", firstDirection: "desc" },
+    { key: "skins", label: "S", description: "Skins using partial handicap off the game's lowest HCP. Skin pops equal HCP minus the lowest HCP, with a maximum of 18; a par-3 pop counts as one-half stroke.", firstDirection: "desc" },
+    { key: "frontWeight", label: "FN", description: "Front Net. A sole winner earns 2 tics; every tied winner earns 1 tic.", firstDirection: "desc" },
+    { key: "backWeight", label: "BN", description: "Back Net. A sole winner earns 2 tics; every tied winner earns 1 tic.", firstDirection: "desc" },
+    { key: "totalNetWeight", label: "TN", description: "Total Net. A sole winner earns 2 tics; every tied winner earns 1 tic.", firstDirection: "desc" },
+    { key: "positive", label: "$+", description: "Amount earned from the player's tics.", firstDirection: "desc" },
+    { key: "negative", label: "$-", description: "Amount owed for tics earned by other players.", firstDirection: "desc" },
+    { key: "netPoints", label: "Net $", description: "Net amount after combining $+ and $-. Final fractional balances settle to whole amounts; BCCC Tips records any remaining collection difference.", firstDirection: "desc" }
+  ];
+  const $ = (selector) => document.querySelector(selector);
+  const teeEntries = Object.entries(E.COURSE.tees).filter(([, tee]) => tee.selectable !== false);
+  const params = new URLSearchParams(location.search);
+  const spectatorMode = params.get("spectator") === "1";
+  let state = loadLocal();
+  let connectionMode = "connecting";
+  let groupWasChosen = params.has("group");
+  let selectedGroup = R.GROUPS.includes(params.get("group")) ? params.get("group") : "A";
+  let selectedHole = 1;
+  let selectedCommentHole = 1;
+  let scorecardOpen = false;
+  let scorerLinkLocked = params.get("scorer") === "1";
+  let scorerToken = params.get("token") || "";
+  const scorerRoundId = params.get("round") || "";
+  let celebrationAudioContext;
+  let eagleAudio;
+  let eventSource;
+  let serviceWorkerRegistration;
   let toastTimer;
-  const newRound = () => ({
-    id: 'r-'+Date.now()+'-'+Math.floor(Math.random()*100000),
-    startedAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    hole: 1, tee:'gold',
-    players: [{id:'p1',name:'Player 1',scores:Array(18).fill(null)},
-              {id:'p2',name:'Player 2',scores:Array(18).fill(null)}]
-  });
-  const readJson = (key, fallback) => {try{const v=JSON.parse(localStorage.getItem(key));return v??fallback;}catch{return fallback;}};
-  let state = readJson(STORAGE,null) || newRound();
-  let markers = readJson(MARKERS_STORAGE,{});
-  let history = readJson(HISTORY_STORAGE,[]);
-  let drawnShapes = readJson(ART_STORAGE,[]);
-  if(!Array.isArray(drawnShapes))drawnShapes=[];
-  let osmCache = readJson(OSM_CACHE_STORAGE,null);
-  if (!Array.isArray(state.players) || state.players.length<1) state=newRound();
-  state.hole=Math.max(1,Math.min(18,Number(state.hole)||1));
-  if(!yardages[state.tee])state.tee='gold';
-  state.players=state.players.slice(0,5).map((p,i)=>({id:p.id||'p'+i,name:String(p.name||'Player '+(i+1)).slice(0,32),scores:Array.from({length:18},(_,h)=>Number.isInteger(p.scores?.[h]) && p.scores[h]>=1 && p.scores[h]<=20?p.scores[h]:null)}));
-  const save = () => {state.updatedAt=new Date().toISOString();try{localStorage.setItem(STORAGE,JSON.stringify(state));}catch{showToast('Storage unavailable. Export your scorecard to save it.');}};
-  const saveMarkers=()=>{try{localStorage.setItem(MARKERS_STORAGE,JSON.stringify(markers));}catch{showToast('Could not save green locations on this device.');}};
-  const saveHistory=()=>{try{localStorage.setItem(HISTORY_STORAGE,JSON.stringify(history));}catch{showToast('Could not save round history.');}};
-  const esc = (text) => String(text).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-  const fmtScore=(n)=>!Number.isFinite(n)?'—':n>0?'+'+n:n===0?'E':String(n);
-  const holeId=()=>state.hole-1;
-  const roundHasScores=()=>state.players.some(p=>p.scores.some(v=>v!==null));
-  const courseYardage=(hole=holeId())=>yardages[state.tee]?.[hole]??null;
-  const holesEntered=(p)=>p.scores.filter(x=>x!==null).length;
-  function showToast(msg){const t=$('toast');t.textContent=msg;t.classList.add('shown');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('shown'),3500);}
-  function render(){
-    const h=holeId(), par=pars[h];
-    $('holeLabel').innerHTML=`HOLE ${state.hole} <b>•</b> PAR ${par} <b>•</b> HCP ${handicaps[h]}`;
-    $('parInfo').textContent=par;
-    $('hcpInfo').textContent=handicaps[h];
-    $('teeInfo').textContent=courseYardage()??'—';
-    $('teeYards').textContent=teeName[state.tee]+' · '+(courseYardage()??'—')+' YDS';
-    $('teeSelect').value=state.tee;
-    $('yardHole').textContent=state.hole;
-    $('parToHole').textContent=pars.slice(0,state.hole).reduce((a,b)=>a+b,0);
-    $('holesCount').textContent=`${Math.max(...state.players.map(holesEntered))} / 18`;
-    $('playersCount').textContent=state.players.length;
-    $('prevHole').disabled=state.hole===1;
-    $('nextHole').disabled=state.hole===18;
-    $('nextHoleBottom').disabled=state.hole===18;
-    $('scoreRows').innerHTML=state.players.map((p,index)=>{
-      const score=p.scores[h];
-      const entered=p.scores.map((s,i)=>s===null?null:s-pars[i]);
-      const totalToPar=entered.reduce((n,s)=>n+(s??0),0);
-      const gross=p.scores.reduce((n,s)=>n+(s??0),0);
-      const scoreClass=score===null?'':score<par?'under':score>par?'over':'';
-      return `<div class="score-row" data-player="${index}"><div class="score-player"><strong title="${esc(p.name)}">${esc(p.name)}</strong><small>${holesEntered(p)} holes · ${gross||'—'} gross · ${fmtScore(totalToPar)} par</small></div><button class="score-change" data-action="minus" data-index="${index}" aria-label="Decrease ${esc(p.name)} score">−</button><button class="score-value ${scoreClass}" data-action="par" data-index="${index}" title="Tap to set par; tap again to clear" aria-label="Set or clear ${esc(p.name)} par score">${score??'—'}</button><button class="score-change plus" data-action="plus" data-index="${index}" aria-label="Increase ${esc(p.name)} score">+</button></div>`;
-    }).join('');
-    updateDistances();
-    refreshMapMarkers();
+  let authToken = localStorage.getItem(SESSION_KEY) || "";
+  let currentUser = null;
+  let adminUnlocked = false;
+  let currentAdmin = null;
+  let admins = [];
+  let adminInviteLink = "";
+  let playerInviteLink = "";
+  let playerInvitePlayer = null;
+  let savedPlayers = [];
+  let savedPlayersLoading = false;
+  let savedRounds = [];
+  let publicLeaderboard = null;
+  let leaderboardLoading = false;
+  let shareTokens = {};
+  let activeSavedRound = null;
+  let pendingReuseRound = null;
+  let savedPlayerSearch = "";
+  let selectedSavedPlayerId = "";
+  let savedRosterGroupSelection = "A";
+  let playerEntryMode = "";
+  let indexUpdateInProgress = false;
+  let indexUpdateMessage = "";
+  let indexUpdateError = false;
+  const scoreSyncStatus = new Map();
+  const scoreSyncTimers = new Map();
+  const touchFeedback = new Map();
+  const touchFeedbackTimers = new Map();
+  let groupPresence = {};
+  let readinessData = null;
+  let readinessLoading = false;
+  let leaderboardWakeLock = null;
+  let leaderboardWakeLockRequesting = false;
+  let autoAdvanceTimer;
+  let headerLayoutFrame;
+  let headerHeightFrame;
+  let headerModeTimer;
+  let pendingHeaderCompact = null;
+  let leaderboardSort = { key: "standing", direction: "asc" };
+  let preferences = loadPreferences();
+
+  document.body.classList.toggle("android-device", IS_ANDROID);
+
+  function loadLocal() {
+    try { return R.normalizeState(JSON.parse(localStorage.getItem(STORAGE_KEY))); }
+    catch (_) { return R.defaultState(); }
   }
-  function updateScore(playerIndex,action){
-    const p=state.players[playerIndex];if(!p)return;
-    const h=holeId(), prev=p.scores[h], par=pars[h];
-    if(action==='par')p.scores[h]=prev===null?par:null;
-    if(action==='plus')p.scores[h]=Math.min(20,(prev??par)+1);
-    if(action==='minus')p.scores[h]=Math.max(1,(prev??par)-1);
-    save();render();
+  function saveLocal() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+  function loadPreferences() {
+    try { return { sound: true, autoAdvance: false, display: "normal", ...JSON.parse(localStorage.getItem(PREFS_KEY)) }; }
+    catch (_) { return { sound: true, autoAdvance: false, display: "normal" }; }
   }
-  function moveHole(newHole){
-    const next=Math.max(1,Math.min(18,newHole));if(next===state.hole)return;
-    state.hole=next;save();render();
-    if(mapMode==='draw')cancelDrawing(false);
-    refreshCourseArtwork();
-    const center=markers[next]?.center;
-    if(map && center)map.flyTo([center.lat,center.lng],Math.max(map.getZoom(),17),{duration:.8});
-    else if(map && drawnShapes.some(f=>f.hole===next)){const latlngs=drawnShapes.filter(f=>f.hole===next).flatMap(f=>f.points.map(p=>[p.lat,p.lng]));map.fitBounds(L.latLngBounds(latlngs),{padding:[80,80],maxZoom:18});}
-    else setInstruction(`Hole ${next}: green not mapped yet. Choose “Mark Green” to add a location.`);
+  function savePreferences() { localStorage.setItem(PREFS_KEY, JSON.stringify(preferences)); }
+  function applyUserGroupDefault(force = false) {
+    if (groupWasChosen && !force) return;
+    const player = currentRoundPlayer();
+    selectedGroup = player?.group || "A";
+    const url = new URL(location.href);
+    url.searchParams.set("group", selectedGroup);
+    history.replaceState(null, "", url);
   }
 
-  // Map and live position
-  let map=null, satelliteLayer=null, roadLayer=null, animatedLayer=null;
-  let activeBase = (() => {try{return localStorage.getItem(MAP_STYLE_STORAGE)==='road'?'road':'satellite';}catch{return 'satellite';}})();
-  let illustratedOn = (() => {try{return localStorage.getItem(MAP_STYLE_STORAGE)==='animated';}catch{return false;}})();
-  let visualPositionMarker=null, animatedGuide=null;
-  let gpsWatch=null, livePosition=null, demoPosition=null, positionMarker=null, accuracyCircle=null;
-  let greenLayers=[], measureLayer=null, measureTarget=null, mapMode='normal', markType='center';
-  let artLayer=null, drawingLayer=null, drawType=null, drawVertices=[];
-  let osmShapes = Array.isArray(osmCache?.features)?osmCache.features:[];
-  let osmFetchInFlight=false, osmFetchAttempted=false, osmFetchError=false;
-  const artColors={fairway:{color:'#356a3d',fillColor:'#84c765',fillOpacity:.94,weight:3},green:{color:'#3d8650',fillColor:'#cbf496',fillOpacity:.98,weight:3},bunker:{color:'#bc9a57',fillColor:'#f1dfae',fillOpacity:.98,weight:3},water:{color:'#247fa7',fillColor:'#64bfdd',fillOpacity:.95,weight:3},tee:{color:'#205937',fillColor:'#4da36f',fillOpacity:.96,weight:3},rough:{color:'#315b31',fillColor:'#4b7f40',fillOpacity:.75,weight:2}};
-  const validArtPoint=p=>p&&Number.isFinite(p.lat)&&Number.isFinite(p.lng)&&p.lat>30.64&&p.lat<30.78&&p.lng>-97.75&&p.lng<-97.59;
-  const normalShape=(f)=>f&&artColors[f.type]&&Array.isArray(f.points)&&f.points.length>=3&&f.points.length<=500&&f.points.every(validArtPoint);
-  drawnShapes=drawnShapes.filter(normalShape).slice(0,200);
-  osmShapes=osmShapes.filter(normalShape).slice(0,600);
-  const saveArt=()=>{try{localStorage.setItem(ART_STORAGE,JSON.stringify(drawnShapes));}catch{showToast('Course drawing storage full. Export drawings as a backup.');}};
-  const effectivePosition=()=>livePosition??demoPosition;
-  const isLive=()=>Boolean(livePosition);
-  const yards=(lat1,lng1,lat2,lng2)=>{
-    const rad=n=>n*Math.PI/180, R=6371000;
-    const dLat=rad(lat2-lat1),dLon=rad(lng2-lng1);
-    const a=Math.sin(dLat/2)**2+Math.cos(rad(lat1))*Math.cos(rad(lat2))*Math.sin(dLon/2)**2;
-    return Math.round((2*R*Math.asin(Math.min(1,Math.sqrt(a))))*1.0936133);
-  };
-  function setInstruction(s){$('mapInstruction').textContent=s;}
-  function updateStatus(){
-    const s=$('gpsStatus');
-    if(livePosition){s.className='status-pill on';s.textContent=`● GPS ON ±${Math.round((livePosition.accuracy||0)*1.0936)}YD`;}
-    else if(demoPosition){s.className='status-pill test';s.textContent='◇ TEST POINT';}
-    else{s.className='status-pill';s.textContent='● GPS OFF';}
-  }
-  function updateMapButtons(){
-    const b=$('animatedBtn');
-    b.classList.toggle('active',illustratedOn);
-    b.setAttribute('aria-pressed',String(illustratedOn));
-    b.innerHTML=illustratedOn?'✦ <span>Satellite Map</span>':'✦ <span>Course Art</span>';
-    b.title=illustratedOn?'Return to satellite imagery':'Show georeferenced golf fairways, greens, bunkers and hazards (where mapped)';
-    $('layerBtn').innerHTML=activeBase==='road'?'▧ <span>Streets</span>':'▧ <span>Satellite</span>';
-    $('mapShell').classList.toggle('illustrated-on',illustratedOn);
-    const credit=$('mapCredit');
-    if(credit)credit.textContent=illustratedOn?'Golf outlines: OpenStreetMap contributors or your own traced shapes · © map imagery providers':'Map tiles © credited providers · experimental course markers';
-    updateArtStatus();
-  }
-  function refreshAnimatedGuide(){
-    if(animatedGuide&&map){map.removeLayer(animatedGuide);animatedGuide=null;}
-    if(!map||!illustratedOn)return;
-    const pos=effectivePosition(),center=markers[state.hole]?.center;
-    if(!pos||!center)return;
-    animatedGuide=L.polyline([[pos.lat,pos.lng],[center.lat,center.lng]],{
-      color:'#faf7e9',weight:5,opacity:.88,dashArray:'12,13',className:'animated-distance-guide',interactive:false
-    }).addTo(map);
-  }
-  function refreshAnimatedPosition(){
-    if(visualPositionMarker&&map){map.removeLayer(visualPositionMarker);visualPositionMarker=null;}
-    if(!map||!illustratedOn)return;
-    const pos=effectivePosition();
-    if(!pos)return;
-    const kind=isLive()?'Live GPS position':'Simulated test position';
-    const color=isLive()?'#0e7bcd':'#d19823';
-    visualPositionMarker=L.marker([pos.lat,pos.lng],{
-      icon:L.divIcon({className:'animated-gps-icon',html:`<div class="gps-ripple" style="--gps-color:${color}"><span class="gps-core"></span></div>`,iconSize:[48,48],iconAnchor:[24,24]}),
-      interactive:true,zIndexOffset:1100
-    }).addTo(map).bindPopup(kind);
-  }
-  function activateMapStyle(kind,initial=false){
-    if(!map)return;
-    const prev=illustratedOn?'animated':activeBase;
-    // Turn on the new imagery before removing the old, to avoid a blank map.
-    const layers={satellite:satelliteLayer,road:roadLayer,animated:animatedLayer};
-    const incoming=layers[kind];
-    if(!incoming)return;
-    if(!map.hasLayer(incoming))incoming.addTo(map);
-    for(const [id,layer] of Object.entries(layers))if(id!==kind&&map.hasLayer(layer))map.removeLayer(layer);
-    illustratedOn=kind==='animated';
-    if(!illustratedOn)activeBase=kind;
-    try{localStorage.setItem(MAP_STYLE_STORAGE,kind);}catch{}
-    updateMapButtons();refreshAnimatedPosition();refreshAnimatedGuide();refreshCourseArtwork();
-    if(illustratedOn)loadOSMGolfShapes();
-    if(!initial){
-      if(mapMode==='normal')setInstruction(illustratedOn?'Illustrated hole view • only mapped course outlines shown':`Hole ${state.hole} • ${kind==='road'?'street':'satellite'} course view`);
-      showToast(illustratedOn?'Illustrated course map on. Use Draw Hole if outlines are missing.':`${kind==='road'?'Streets':'Satellite'} map restored.`);
+  async function restoreSession() {
+    if (!authToken) return;
+    try {
+      const response = await fetch("/api/auth/session", { headers: { Authorization: `Bearer ${authToken}` }, cache: "no-store" });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || "Sign-in expired");
+      currentUser = body.account;
+      adminUnlocked = currentUser?.role === "admin";
+      currentAdmin = adminUnlocked ? currentUser : null;
+    } catch (_) {
+      lockAdminControls();
     }
   }
-  function toggleAnimated(){if(!map){showToast('Map must load before switching views.');return;}activateMapStyle(illustratedOn?'satellite':'animated');}
-  function updateDistances(){
-    const pos=effectivePosition(), pts=markers[state.hole]||{};
-    ['front','center','back'].forEach(kind=>{
-      const id='yard'+kind.charAt(0).toUpperCase()+kind.slice(1);
-      $(id).textContent=pos&&pts[kind]?yards(pos.lat,pos.lng,pts[kind].lat,pts[kind].lng):'—';
-    });
-    const count=['front','center','back'].filter(k=>Boolean(pts[k])).length;
-    $('yardageFoot').textContent=!count?'Green coordinates not yet mapped':!pos?'Enable GPS to show green distances':`${isLive()?'GPS':'TEST'} distances in yards · ${count}/3 green positions mapped`;
-    updateStatus();
+  function loadQueue() {
+    try { const value = JSON.parse(localStorage.getItem(QUEUE_KEY)); return Array.isArray(value) ? value : []; }
+    catch (_) { return []; }
   }
-  function setPosition(lat,lng,accuracy=0,mode='live'){
-    if(mode==='live'){livePosition={lat,lng,accuracy};demoPosition=null;}
-    else if(!livePosition)demoPosition={lat,lng,accuracy};
-    if(!map){updateDistances();return;}
-    const pos=effectivePosition();
-    if(!pos)return;
-    if(positionMarker)map.removeLayer(positionMarker);
-    if(accuracyCircle)map.removeLayer(accuracyCircle);
-    positionMarker=L.circleMarker([pos.lat,pos.lng],{radius:9,weight:3,color:'#fff',fillColor:isLive()?'#1576ed':'#edaa35',fillOpacity:1}).addTo(map).bindPopup(isLive()?'Your reported device location':'TEST POSITION — not a live GPS reading');
-    if(isLive()&&accuracy){accuracyCircle=L.circle([pos.lat,pos.lng],{radius:accuracy,color:'#1677eb',weight:1,fillOpacity:.09,interactive:false}).addTo(map);}
-    updateDistances();
-    refreshAnimatedPosition();refreshAnimatedGuide();
-    if(measureTarget)drawMeasurement();
+  function saveQueue(queue) { localStorage.setItem(QUEUE_KEY, JSON.stringify(queue.slice(-100))); }
+  function makeId() { return globalThis.crypto?.randomUUID?.() || `p-${Date.now()}-${Math.random().toString(16).slice(2)}`; }
+  function esc(value) { return String(value).replace(/[&<>'"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[c])); }
+  function nameOf(player, index) { return player.name.trim() || `Player ${index + 1}`; }
+  function playerNameHtml(player, index) { return `${esc(nameOf(player, index))}${player.isGuest ? '<sup class="guest-marker">*G</sup>' : ""}`; }
+  function playerExportName(player, index) { return `${nameOf(player, index)}${player.isGuest ? " *G" : ""}${player.inGame ? "" : " (not in game)"}`; }
+  function teeOf(player) { return E.teeForPlayer(E.COURSE, player); }
+  function hcp(player) { return E.playingHandicap(player.ghin, state.settings, teeOf(player)); }
+  function hcpForRound(player, round) { return E.playingHandicap(player.ghin, round.settings, teeOf(player)); }
+  function hcpForValues(index, teeKey) { return E.playingHandicap(E.parseHandicapInput(index), state.settings, E.teeForPlayer(E.COURSE, { teeKey })); }
+  function displayIndex(value) { return E.formatHandicap(value, 1); }
+  function displayPlayingHandicap(value) { return E.formatHandicap(value, 0); }
+  function requiredHandicapValue(value) {
+    const text = String(value ?? "").trim().replace(/[−–—]/g, "-");
+    if (!/^[+-]?\d+(?:\.\d+)?$/.test(text)) return null;
+    const parsed = E.parseHandicapInput(text);
+    return Number.isFinite(parsed) && parsed >= -10 && parsed <= 54 ? parsed : null;
   }
-  function refreshMapMarkers(){
-    if(!map)return;
-    greenLayers.forEach(l=>map.removeLayer(l));greenLayers=[];
-    const pts=markers[state.hole]||{};
-    const styles={front:{color:'#e8f5ff',fill:'#2680d3'},center:{color:'#ffffff',fill:'#961f2a'},back:{color:'#ffffff',fill:'#dba02c'}};
-    ['front','center','back'].forEach(k=>{
-      if(!pts[k])return;
-      const p=pts[k],s=styles[k];
-      const m=L.circleMarker([p.lat,p.lng],{radius:k==='center'?11:8,weight:3,color:s.color,fillColor:s.fill,fillOpacity:1}).addTo(map)
-        .bindTooltip(`${k.toUpperCase()} • Hole ${state.hole}`,{permanent:true,direction:k==='center'?'top':'right',offset:[0,-4]});
-      greenLayers.push(m);
-    });
-    updateDistances();refreshAnimatedGuide();
+  function leaderboardIsSaved() { return !state.players.length && publicLeaderboard?.source === "saved" && Boolean(publicLeaderboard.state); }
+  function leaderboardRound() { return leaderboardIsSaved() ? publicLeaderboard.state : state; }
+  function isPlusHandicapInput(value) { return /^[+-]/.test(String(value ?? "").trim()); }
+  function syncPlusHandicapToggle(input, button) {
+    const active = isPlusHandicapInput(input.value);
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", String(active));
+    return active;
   }
-  function initMap(){
-    if(typeof window.L==='undefined'){$('mapUnavailable').hidden=false;setInstruction('Map library offline. Scoring remains available.');return;}
-    map=L.map('map',{zoomControl:false,attributionControl:true,preferCanvas:true}).setView(CLUBHOUSE,16);
-    satelliteLayer=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:20,maxNativeZoom:19,attribution:'Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics and GIS User Community'});
-    roadLayer=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap contributors'});
-    animatedLayer=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',{maxZoom:20,maxNativeZoom:19,attribution:'Tiles © Esri and its licensors — World Topographic Map'});
-    activateMapStyle(illustratedOn?'animated':activeBase,true);
-    if(illustratedOn)setInstruction('Illustrated course shapes • only verified/imported/traced geometry is shown');
-    else if(activeBase==='road')setInstruction('Street map view • GPS coordinates and yardages unchanged');
-    L.control.zoom({position:'bottomright'}).addTo(map);
-    map.on('click',e=>{
-      if(mapMode==='draw'){addDrawVertex(e.latlng);}
-      else if(mapMode==='mark'){
-        markers[state.hole]??={};
-        markers[state.hole][markType]={lat:Number(e.latlng.lat.toFixed(8)),lng:Number(e.latlng.lng.toFixed(8))};
-        saveMarkers();showToast(`Hole ${state.hole} ${markType} green point saved on this iPad.`);
-        setMode('normal');refreshMapMarkers();
-      }else if(mapMode==='measure'){
-        measureTarget=e.latlng;drawMeasurement();
-      }else if(mapMode==='test'){
-        if(livePosition){showToast('Live GPS is active; disable GPS or use it for distances.');setMode('normal');return;}
-        setPosition(e.latlng.lat,e.latlng.lng,0,'test');setMode('normal');
-        showToast('Yellow marker is only a TEST position, not your actual location.');
-      }
-    });
-    let firstError=true;
-    [satelliteLayer,roadLayer,animatedLayer].forEach(layer=>layer.on('tileerror',()=>{if(firstError){firstError=false;setInstruction('Map tiles unavailable; try a different map style or check your network.');}}));
-    refreshMapMarkers();refreshCourseArtwork();
-    setTimeout(()=>map?.invalidateSize(),200);
+  function togglePlusHandicapInput(input, button) {
+    const nextActive = button.getAttribute("aria-pressed") !== "true";
+    const magnitude = input.value.trim().replace(/^[+-]/, "");
+    input.value = `${nextActive ? "+" : ""}${magnitude}`;
+    syncPlusHandicapToggle(input, button);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.focus({ preventScroll: true });
+    input.setSelectionRange?.(input.value.length, input.value.length);
   }
-  function setMode(mode,point){
-    mapMode=mode;markType=point||markType;
-    ['measureBtn','markBtn','testBtn','drawBtn'].forEach(id=>$(id).classList.remove('active'));
-    if(mode==='draw'){$('drawBtn').classList.add('active');setInstruction(`DRAW ${String(drawType).toUpperCase()} • HOLE ${state.hole}: tap the outline corners, then Save Shape.`);}
-    else if(mode==='mark'){$('markBtn').classList.add('active');setInstruction(`MARKING HOLE ${state.hole} ${markType.toUpperCase()}: tap the correct spot on the map (satellite is best).`);}
-    else if(mode==='measure'){$('measureBtn').classList.add('active');setInstruction('MEASURE: tap any visible point. Requires your GPS location or a TEST point.');}
-    else if(mode==='test'){$('testBtn').classList.add('active');setInstruction('TEST POINT: tap a spot to simulate your position (not live GPS).');}
-    else setInstruction(illustratedOn?`Hole ${state.hole} • illustrated map (mapped shapes only)`:`Hole ${state.hole} • interactive course ${activeBase==='road'?'street':'satellite'} map`);
-    if(mode!=='measure'){
-      $('measureReadout').hidden=true;
-      measureTarget=null;
-      if(measureLayer&&map){map.removeLayer(measureLayer);measureLayer=null;}
-    }else $('measureReadout').hidden=false;
+  function complete(value, done) { return done ? String(value) : "—"; }
+  function groupPlayers(group = selectedGroup) { return state.players.filter((player) => player.group === group); }
+  function isLocked() { return Boolean(state.settings.locked); }
+  function roundHasCompleteScores(round = state) {
+    return Array.isArray(round.players) && round.players.length > 0 && round.players.every((player) =>
+      Array.isArray(player.scores) && player.scores.length === 18 && player.scores.every((score) => Number(score) >= 1)
+    );
   }
-  function drawMeasurement(){
-    if(!map||!measureTarget)return;
-    const pos=effectivePosition();
-    if(!pos){$('measureReadout').textContent='Turn on GPS or choose Test Point first';return;}
-    if(measureLayer)map.removeLayer(measureLayer);
-    measureLayer=L.polyline([[pos.lat,pos.lng],measureTarget],{color:'#ffdd74',weight:4,dashArray:'8,7'}).addTo(map);
-    $('measureReadout').textContent=`${isLive()?'GPS':'TEST'} → Target: ${yards(pos.lat,pos.lng,measureTarget.lat,measureTarget.lng)} yards`;
+  function currentRoundIsLockedAndSaved() {
+    return isLocked() && savedRounds.some((round) => round.roundId === state.roundId && round.completed && round.locked);
   }
-  function startGPS(){
-    if(!navigator.geolocation){showToast('This device or browser does not provide location services.');return;}
-    if(!window.isSecureContext){showToast('Live GPS requires HTTPS hosting or localhost.');return;}
-    if(gpsWatch!==null){navigator.geolocation.clearWatch(gpsWatch);gpsWatch=null;livePosition=null;updateStatus();updateDistances();showToast('GPS stopped.');return;}
-    $('gpsStatus').textContent='◌ LOCATING…';
-    gpsWatch=navigator.geolocation.watchPosition(pos=>{
-      setPosition(pos.coords.latitude,pos.coords.longitude,pos.coords.accuracy,'live');
-    },err=>{
-      let m=err.code===1?'Location permission denied. Enable Location Services for the web app.':err.code===2?'Location unavailable on this device.':'GPS request timed out. Try outdoors.';
-      showToast(m);$('gpsStatus').textContent='● GPS UNAVAILABLE';
-      if(gpsWatch!==null){navigator.geolocation.clearWatch(gpsWatch);gpsWatch=null;}
-    },{enableHighAccuracy:true,maximumAge:3000,timeout:14000});
+  function scorerLinkExpired() { return scorerLinkLocked && (!scorerToken || !scorerRoundId || scorerRoundId !== state.roundId); }
+  function currentRoundPlayer() {
+    if (currentUser?.role === "admin") return currentUser.playerId ? state.players.find((player) => player.directoryId && player.directoryId === currentUser.playerId) || null : null;
+    if (currentUser?.role !== "player") return null;
+    if (currentUser.accountType === "guest") return currentUser.roundId === state.roundId ? state.players.find((player) => player.id === currentUser.activePlayerId) || null : null;
+    return state.players.find((player) => player.directoryId && player.directoryId === currentUser.playerId) || null;
   }
-  function centerMap(){if(!map){showToast('Map has not loaded.');return;}const p=effectivePosition();if(!p){showToast('Start GPS first, or use the Test Point tool.');return;}map.flyTo([p.lat,p.lng],18);}
-  function focusCourse(){if(map)map.flyTo(CLUBHOUSE,16);else showToast('Map requires an internet connection.');}
-  function toggleLayer(){if(!map)return;activateMapStyle(activeBase==='satellite'?'road':'satellite');}
-  function toggleExpand(){const expanded=document.querySelector('.workspace').classList.contains('map-expanded');document.querySelector('.workspace').classList.toggle('map-expanded',!expanded);$('expandBtn').innerHTML=!expanded?'⛶ <span>Show Scores</span>':'⛶ <span>Full Map</span>';setTimeout(()=>map?.invalidateSize(),200);}
+  function isSelectedGroupScorekeeper() {
+    const player = currentRoundPlayer();
+    return Boolean(player && player.group === selectedGroup && state.settings.scorekeepers[selectedGroup] === player.id);
+  }
+  function canScore() { return !spectatorMode && !isLocked() && (adminUnlocked || isSelectedGroupScorekeeper() || (scorerLinkLocked && !scorerLinkExpired())); }
+  function scoreSyncKey(playerId, holeIndex) { return `${playerId}:${holeIndex}`; }
 
-  // Modals, saved rounds, and data export
-  function openModal(title,html){$('modalTitle').textContent=title;$('modalContent').innerHTML=html;$('modalBackdrop').hidden=false;}
-  function closeModal(){$('modalBackdrop').hidden=true;}
-  function setupPlayers(){
-    const rows=state.players.map((p,i)=>`<div class="player-input-row"><label>Golfer ${i+1}</label><input class="player-name" maxlength="32" data-player="${i}" value="${esc(p.name)}" aria-label="Golfer ${i+1} name"><button class="remove-player" data-player="${i}" title="Remove golfer">Remove</button></div>`).join('');
-    openModal('Manage Players',`<div class="message">Up to 5 golfers. Player scores are stored on this iPad, separately from the Berry Creek DH Game.</div><div id="playerInputs">${rows}</div><div><button class="action secondary" id="addPlayer">+ Add Golfer</button><button class="action" id="savePlayers">Save Players</button></div><p class="hint">Changing names will preserve their existing scores. Removing a player removes that player's scores from the current round.</p>`);
-    $('addPlayer').onclick=()=>{
-      const existing=document.querySelectorAll('#playerInputs .player-name');
-      if(existing.length>=5){showToast('Maximum five golfers.');return;}
-      const i=existing.length, row=document.createElement('div');row.className='player-input-row';
-      row.innerHTML=`<label>Golfer ${i+1}</label><input class="player-name" maxlength="32" value="Player ${i+1}" aria-label="Golfer name"><button class="remove-player" title="Remove golfer">Remove</button>`;
-      $('playerInputs').appendChild(row);attachPlayerRemove();
-    };
-    const attachPlayerRemove=()=>{
-      document.querySelectorAll('.remove-player').forEach(btn=>btn.onclick=()=>{
-        if(document.querySelectorAll('.player-name').length<=1){showToast('At least one golfer is needed.');return;}
-        btn.closest('.player-input-row').remove();
-      });
-    };attachPlayerRemove();
-    $('savePlayers').onclick=()=>{
-      const inputs=Array.from(document.querySelectorAll('#playerInputs .player-name'));
-      const oldByName=new Map(state.players.map(p=>[p.name,p]));
-      // Existing input rows retain their original player indices.
-      state.players=inputs.map((inp,i)=>{
-        const oldIndex=inp.closest('.player-input-row').querySelector('.remove-player').dataset.player;
-        const old=oldIndex!==undefined?state.players[Number(oldIndex)]:null;
-        const name=inp.value.trim()||`Player ${i+1}`;
-        return {id:old?.id||'p-'+Date.now()+'-'+i,name,scores:old?.scores||Array(18).fill(null)};
-      });
-      save();render();closeModal();showToast('Golfers updated.');
-    };
+  function lockAdminControls() {
+    adminUnlocked = false;
+    authToken = "";
+    currentUser = null;
+    currentAdmin = null;
+    admins = [];
+    adminInviteLink = "";
+    playerInviteLink = "";
+    playerInvitePlayer = null;
+    savedPlayers = [];
+    savedRounds = [];
+    shareTokens = {};
+    readinessData = null;
+    playerEntryMode = "";
+    localStorage.removeItem(SESSION_KEY);
   }
-  function archiveCurrent(){
-    if(!roundHasScores())return false;
-    const already=history.findIndex(r=>r.id===state.id);
-    const snapshot=JSON.parse(JSON.stringify(state));snapshot.archivedAt=new Date().toISOString();
-    if(already>=0)history[already]=snapshot;else history.unshift(snapshot);
-    history=history.slice(0,80);saveHistory();return true;
+
+  function setScoreSyncStatus(playerId, holeIndex, status) {
+    const key = scoreSyncKey(playerId, holeIndex);
+    clearTimeout(scoreSyncTimers.get(key));
+    scoreSyncStatus.set(key, status);
+    if (status === "synced") {
+      scoreSyncTimers.set(key, setTimeout(() => {
+        scoreSyncStatus.delete(key);
+        scoreSyncTimers.delete(key);
+        renderGroupScoring();
+      }, 2600));
+    }
   }
-  function fmtDate(iso){try{return new Date(iso).toLocaleString(undefined,{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'});}catch{return iso;}}
-  function roundMenu(){
-    openModal('Round Menu',`<div class="message">Round data is saved locally in this browser. It is not shared or synchronized with the DH app or other devices. Saved rounds remain on this iPad unless browser data is cleared.</div><div><button class="action" id="archiveRound">Save Round Snapshot</button><button class="action" id="newRound">Start New Round</button><button class="action secondary" id="exportCSV">Export Scores CSV</button><button class="action secondary" id="exportPins">Export Green Points JSON</button><button class="action secondary" id="importPins">Import Green Points JSON</button><input type="file" accept=".json,application/json" id="pinsFile" hidden></div><h3>Saved Rounds</h3><div id="roundHistory" class="round-list"></div>`);
-    const refresh=()=>{
-      $('roundHistory').innerHTML=history.length?history.map((r,i)=>`<div class="round-entry"><div><strong>${esc(fmtDate(r.startedAt))}</strong><small>${r.players.length} golfers · ${r.players.reduce((a,p)=>a+holesEntered(p),0)} scores recorded</small></div><button class="action secondary load-round" data-id="${esc(r.id)}">Open</button></div>`).join(''):'<p class="hint">No saved rounds yet. Starting a new round will archive your current scores automatically.</p>';
-      document.querySelectorAll('.load-round').forEach(btn=>btn.onclick=()=>{
-        const found=history.find(r=>r.id===btn.dataset.id);if(!found)return;
-        if(!confirm('Load this saved round? Current scores will first be saved to history.'))return;
-        archiveCurrent();state=JSON.parse(JSON.stringify(found));save();render();closeModal();showToast('Saved round loaded.');
-      });
-    };refresh();
-    $('archiveRound').onclick=()=>{if(archiveCurrent()){showToast('Round snapshot saved.');refresh();}else showToast('Enter at least one score before saving a round.');};
-    $('newRound').onclick=()=>{
-      if(!confirm('Begin a new round? The current round will be added to history if scores have been entered.'))return;
-      archiveCurrent();const players=state.players.map(p=>({id:p.id,name:p.name,scores:Array(18).fill(null)}));const tee=state.tee;
-      state=newRound();state.players=players;state.tee=tee;save();render();closeModal();showToast('New round started. Previous round saved in history if it contained scores.');
-    };
-    $('exportCSV').onclick=exportCSV;
-    $('exportPins').onclick=()=>download('berry-creek-green-points.json',JSON.stringify({course:'Berry Creek',version:1,markers},null,2),'application/json');
-    $('importPins').onclick=()=>$('pinsFile').click();
-    $('pinsFile').onchange=async ev=>{
-      const file=ev.target.files?.[0];if(!file)return;
-      try{
-        const raw=JSON.parse(await file.text()),candidate=raw.markers;
-        if(!candidate||typeof candidate!=='object')throw new Error('Invalid green-points file');
-        const clean={};
-        for(let i=1;i<=18;i++){
-          const row=candidate[i];if(!row)continue;clean[i]={};
-          for(const k of ['front','center','back']){const p=row[k];if(p&&Number.isFinite(p.lat)&&Number.isFinite(p.lng)&&Math.abs(p.lat)<=90&&Math.abs(p.lng)<=180)clean[i][k]={lat:p.lat,lng:p.lng};}
+
+  function setTouchFeedback(playerId, message, kind = "success") {
+    clearTimeout(touchFeedbackTimers.get(playerId));
+    touchFeedback.set(playerId, { message, kind });
+    if (navigator.vibrate && kind === "success") navigator.vibrate(12);
+    renderGroupScoring();
+    touchFeedbackTimers.set(playerId, setTimeout(() => {
+      touchFeedback.delete(playerId);
+      touchFeedbackTimers.delete(playerId);
+      renderGroupScoring();
+    }, 1800));
+  }
+
+  async function dispatchWithTouchFeedback(action, playerId, successMessage) {
+    const accepted = await dispatch(action);
+    setTouchFeedback(playerId, accepted ? successMessage : "Change not saved", accepted ? "success" : "error");
+    return accepted;
+  }
+
+  function measureHeaderHeight() {
+    const appHeader = $(".app-header");
+    if (!appHeader) return;
+    const nextHeight = `${Math.ceil(appHeader.getBoundingClientRect().height)}px`;
+    if (document.documentElement.style.getPropertyValue("--app-header-height") !== nextHeight) {
+      document.documentElement.style.setProperty("--app-header-height", nextHeight);
+    }
+  }
+
+  function scheduleHeaderHeight() {
+    if (headerHeightFrame) return;
+    headerHeightFrame = requestAnimationFrame(() => {
+      headerHeightFrame = 0;
+      measureHeaderHeight();
+    });
+  }
+
+  function applyHeaderLayout(compact) {
+    pendingHeaderCompact = null;
+    clearTimeout(headerModeTimer);
+    headerModeTimer = 0;
+    document.body.classList.toggle("header-compact", compact);
+    scheduleHeaderHeight();
+  }
+
+  function scheduleHeaderLayout() {
+    if (headerLayoutFrame) return;
+    headerLayoutFrame = requestAnimationFrame(() => {
+      headerLayoutFrame = 0;
+      const mobile = MOBILE_HEADER_MEDIA.matches;
+      const compact = document.body.classList.contains("header-compact");
+      const shouldCompact = mobile && (IS_ANDROID || (compact ? window.scrollY > HEADER_COMPACT_EXIT_Y : window.scrollY >= HEADER_COMPACT_ENTER_Y));
+
+      if (IS_ANDROID || !mobile || shouldCompact === compact) {
+        if (shouldCompact === compact) {
+          pendingHeaderCompact = null;
+          clearTimeout(headerModeTimer);
+          headerModeTimer = 0;
+          scheduleHeaderHeight();
+        } else {
+          applyHeaderLayout(shouldCompact);
         }
-        if(!confirm('Replace green point mappings currently stored on this iPad with the imported mappings?'))return;
-        markers=clean;saveMarkers();render();showToast('Green points imported.');closeModal();
-      }catch{showToast('Could not read that green-points file.');}
-    };
-  }
-  function download(filename,content,type){
-    const url=URL.createObjectURL(new Blob([content],{type})),a=document.createElement('a');a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),2000);
-  }
-  function exportCSV(){
-    const q=v=>'"'+String(v??'').replace(/"/g,'""')+'"';
-    const rows=[['Player','Tee',...pars.map((_,i)=>'Hole '+(i+1)),'Out','In','Gross Total','To Par','Holes Played']];
-    for(const p of state.players){
-      const sum=a=>a.reduce((n,v)=>n+(v??0),0);
-      const gross=sum(p.scores),played=holesEntered(p),parPlayed=p.scores.reduce((n,s,i)=>n+(s===null?0:pars[i]),0);
-      rows.push([p.name,teeName[state.tee],...p.scores.map(x=>x??''),sum(p.scores.slice(0,9)),sum(p.scores.slice(9)),gross,gross-parPlayed,played]);
-    }
-    download('berry-creek-scores-'+new Date().toISOString().slice(0,10)+'.csv',rows.map(r=>r.map(q).join(',')).join('\r\n'),'text/csv;charset=utf-8');showToast('Score CSV exported.');
-  }
-  function openCard(){
-    const sum=a=>a.reduce((n,v)=>n+(v??0),0);
-    const heading=['GOLFER',...Array.from({length:18},(_,i)=>i+1),'OUT','IN','TOT'];
-    const row=(arr,klass='')=>`<tr>${arr.map((x,i)=>`<${i===0?'th':'td'} class="${i>=19?'totcol ':''}${klass}">${esc(x)}</${i===0?'th':'td'}>`).join('')}</tr>`;
-    const cardRows=state.players.map(p=>{
-      const cells=[p.name,...p.scores.map(s=>s??'—'),sum(p.scores.slice(0,9))||'—',sum(p.scores.slice(9))||'—',sum(p.scores)||'—'];
-      return `<tr>${cells.map((v,i)=>i===0?`<th>${esc(v)}</th>`:`<td class="${i>=19?'totcol ':''}${i>0&&i<19?'editable':''}" data-player="${esc(p.id)}" data-hole="${i-1}" title="Tap to edit on this hole">${esc(v)}</td>`).join('')}</tr>`;
-    }).join('');
-    const parsLine=['PAR',...pars,36,36,72];
-    const hcpLine=['HCP',...handicaps,'','',''];
-    const yardLine=['YARDS',...yardages[state.tee].map(x=>x??'—'),sum(yardages[state.tee].slice(0,9)),sum(yardages[state.tee].slice(9)),sum(yardages[state.tee])];
-    openModal('18-Hole Scorecard',`<div class="message">Swipe horizontally to view holes 1–18. Tap a golfer’s hole cell to navigate to that hole and edit the score.</div><div class="score-grid-wrap"><table class="score-grid"><thead>${row(heading)}</thead><tbody>${row(parsLine)}${row(hcpLine)}${row(yardLine)}${cardRows}</tbody></table></div><div style="margin-top:15px"><button class="action" id="cardExport">Export Scores CSV</button><button class="action secondary" id="cardDone">Back to Hole</button></div>`);
-    $('cardExport').onclick=exportCSV;$('cardDone').onclick=closeModal;
-    document.querySelectorAll('.score-grid td.editable').forEach(c=>c.onclick=()=>{const h=Number(c.dataset.hole)+1;if(h>=1&&h<=18){moveHole(h);closeModal();}});
-  }
-  function chooseMark(){
-    if(!map){showToast('Load the map before calibrating greens.');return;}
-    const pts=markers[state.hole]||{};
-    openModal(`Map Hole ${state.hole} Green`,`<div class="message"><strong>Calibration tool:</strong> choose a green point, then tap its real position in the map (satellite view is recommended for accuracy). These points are stored only on this iPad until exported; no approximate green locations are preloaded.</div><p>Mapped for this hole: Front ${pts.front?'✓':'—'} · Center ${pts.center?'✓':'—'} · Back ${pts.back?'✓':'—'}</p><button class="action" data-point="front">Set FRONT</button><button class="action" data-point="center">Set CENTER</button><button class="action" data-point="back">Set BACK</button><button class="action secondary" id="clearPins">Clear This Hole's Points</button><p class="hint">For best results, use accurately surveyed coordinates or precise mapping data. Satellite estimates alone may be off by several yards or more.</p>`);
-    document.querySelectorAll('[data-point]').forEach(btn=>btn.onclick=()=>{const point=btn.dataset.point;closeModal();setMode('mark',point);showToast('Now tap the '+point+' edge of the green on the map.');});
-    $('clearPins').onclick=()=>{if(!confirm(`Clear all mapped green points for hole ${state.hole}?`))return;delete markers[state.hole];saveMarkers();refreshMapMarkers();updateDistances();closeModal();showToast('Green points cleared.');};
-  }
-
-  // Genuine course-specific hole drawings. Never invent positions for unmapped features.
-  function updateArtStatus(){
-    const total=drawnShapes.filter(f=>f.hole===state.hole).length;
-    const status=$('courseArtStatus'),legend=$('courseArtLegend');
-    status.hidden=!illustratedOn;
-    legend.hidden=!illustratedOn;
-    if(!illustratedOn)return;
-    const osm=osmShapes.length;
-    const statusMsg=osmFetchInFlight?'Loading OpenStreetMap outlines…':osmFetchError?'Live map data unavailable':osm?`${osm} community-mapped features`:'No verified community shapes found';
-    status.textContent=`Hole ${state.hole}: ${total} custom outlines • ${statusMsg}`;
-    status.title='Illustration accuracy depends on mapped shapes. These are not survey-grade GPS points.';
-  }
-  function refreshCourseArtwork(){
-    if(!map||typeof L==='undefined')return;
-    if(artLayer){map.removeLayer(artLayer);artLayer=null;}
-    artLayer=L.layerGroup();
-    if(illustratedOn){
-      const features=[...osmShapes,...drawnShapes.filter(f=>f.hole===state.hole)];
-      for(const f of features){
-        if(!normalShape(f))continue;
-        const latlngs=f.points.map(p=>[p.lat,p.lng]);
-        const shape=L.polygon(latlngs,{...artColors[f.type],className:'golf-art-shape',interactive:false});
-        shape.addTo(artLayer);
+        return;
       }
-      artLayer.addTo(map);
-    }
-    updateArtStatus();
-  }
-  function previewDrawing(){
-    if(!map)return;
-    if(drawingLayer){map.removeLayer(drawingLayer);drawingLayer=null;}
-    const n=drawVertices.length;
-    $('drawStatus').textContent=`Hole ${state.hole} · ${drawType||'shape'} · ${n} corners (minimum 3)`;
-    $('finishShape').disabled=n<3;
-    if(!n)return;
-    drawingLayer=L.layerGroup();
-    const v=drawVertices.map(p=>[p.lat,p.lng]);
-    const line=n>=3?L.polygon(v,{...artColors[drawType],fillOpacity:.38,dashArray:'8,5',interactive:false}):L.polyline(v,{color:'#f5db69',weight:4,dashArray:'8,5',interactive:false});
-    line.addTo(drawingLayer);
-    v.forEach(pair=>L.circleMarker(pair,{radius:5,color:'#fff',weight:2,fillColor:'#be2834',fillOpacity:1,interactive:false}).addTo(drawingLayer));
-    drawingLayer.addTo(map);
-  }
-  function beginDrawing(type){
-    if(!map)return showToast('Map library must load before drawing course shapes.');
-    if(!artColors[type])return;
-    drawVertices=[];drawType=type;
-    // Accurate outlines should be created over satellite imagery, not from guessed shapes.
-    activateMapStyle('satellite',true);
-    closeModal();
-    $('drawActions').hidden=false;
-    setMode('draw');previewDrawing();
-    showToast('Tap 3 or more corners around the '+type+'. Select Save Shape when finished.');
-  }
-  function addDrawVertex(latlng){
-    const p={lat:Number(latlng.lat.toFixed(8)),lng:Number(latlng.lng.toFixed(8))};
-    if(!validArtPoint(p)){showToast('Course drawing must be near Berry Creek.');return;}
-    if(drawVertices.length>=250){showToast('Maximum 250 corners per shape. Save this shape.');return;}
-    drawVertices.push(p);previewDrawing();
-  }
-  function undoDrawVertex(){if(mapMode!=='draw')return;drawVertices.pop();previewDrawing();}
-  function cancelDrawing(message=true){
-    if(drawingLayer&&map)map.removeLayer(drawingLayer);
-    drawingLayer=null;drawVertices=[];drawType=null;$('drawActions').hidden=true;
-    setMode('normal');
-    if(message)showToast('Drawing cancelled.');
-  }
-  function finishDrawing(){
-    if(mapMode!=='draw'||drawVertices.length<3)return showToast('Tap at least three outline corners.');
-    drawnShapes.push({id:'bc-'+Date.now()+'-'+Math.random().toString(36).slice(2,8),hole:state.hole,type:drawType,points:drawVertices.slice(),source:'traced'});
-    saveArt();cancelDrawing(false);activateMapStyle('animated',true);refreshCourseArtwork();
-    showToast('Course shape saved on this iPad. Export it as a backup.');
-  }
-  function showArtEditor(){
-    if(mapMode==='draw'){showToast('Save or cancel the current shape first.');return;}
-    const mine=drawnShapes.filter(f=>f.hole===state.hole);
-    const features=mine.length?mine.map(f=>`<div class="round-entry"><div><strong>${esc(f.type.toUpperCase())}</strong><small>${f.points.length} outline corners · saved on this device</small></div><button class="action secondary remove-art" data-shape="${esc(f.id)}">Delete</button></div>`).join(''):'<p class="hint">No shapes have been drawn for this hole yet.</p>';
-    openModal(`Illustrate Hole ${state.hole}`,`<div class="message"><b>How to map your course:</b> Start a shape, then tap around its real outline on the satellite image. Save after 3+ corners. Fairways, greens, sand traps and water appear as colorful polygons in Course Art mode. This is not a 3D flyover. For safety, unmapped hazards are <b>not</b> guessed.</div><div class="art-editor-buttons"><button class="action shape-start" data-kind="fairway">🌿 Fairway</button><button class="action shape-start" data-kind="green">⛳ Green</button><button class="action shape-start" data-kind="bunker">▱ Bunker</button><button class="action shape-start" data-kind="water">≈ Water</button><button class="action shape-start secondary" data-kind="tee">Tee Box</button><button class="action shape-start secondary" data-kind="rough">Rough</button></div><h3>Hole ${state.hole} custom outlines</h3><div class="round-list">${features}</div><h3>Share / Back up the course artwork</h3><p class="hint">Drawings are saved locally, not shared between players. Export a JSON backup to transfer them to other iPads. OpenStreetMap shapes load automatically when available online; imported drawings supplement them.</p><button class="action secondary" id="artExport">Export Drawings JSON</button><button class="action secondary" id="artImport">Import Drawings JSON</button><input id="artFile" type="file" accept=".json,application/json" hidden><button class="action secondary" id="artLoadOSM">Refresh Map Data</button>`);
-    document.querySelectorAll('.shape-start').forEach(btn=>btn.onclick=()=>beginDrawing(btn.dataset.kind));
-    document.querySelectorAll('.remove-art').forEach(btn=>btn.onclick=()=>{if(!confirm('Delete this outlined shape from this iPad?'))return;drawnShapes=drawnShapes.filter(f=>f.id!==btn.dataset.shape);saveArt();refreshCourseArtwork();showArtEditor();});
-    $('artExport').onclick=()=>download('berry-creek-course-art.json',JSON.stringify({course:'The Club at Berry Creek',schema:1,exported:new Date().toISOString(),features:drawnShapes},null,2),'application/json');
-    $('artImport').onclick=()=>$('artFile').click();
-    $('artFile').onchange=async ev=>{
-      const file=ev.target.files?.[0];if(!file)return;
-      try{
-        if(file.size>1500000)throw Error('Too large');
-        const obj=JSON.parse(await file.text());
-        if(obj.course!=='The Club at Berry Creek'||!Array.isArray(obj.features)||obj.features.length>200||!obj.features.every(f=>normalShape(f)&&Number.isInteger(f.hole)&&f.hole>=1&&f.hole<=18))throw Error('Invalid course art');
-        if(!confirm(`Import ${obj.features.length} Berry Creek drawings? Existing local drawings will be replaced.`))return;
-        drawnShapes=obj.features.map((f,i)=>({id:'imp-'+Date.now()+'-'+i,hole:f.hole,type:f.type,points:f.points.map(p=>({lat:p.lat,lng:p.lng})),source:'imported'}));
-        saveArt();refreshCourseArtwork();showArtEditor();showToast('Custom course artwork imported.');
-      }catch{showToast('Invalid or incompatible Berry Creek course artwork file.');}
-    };
-    $('artLoadOSM').onclick=()=>{osmFetchAttempted=false;osmCache=null;loadOSMGolfShapes(true);closeModal();};
-  }
-  async function loadOSMGolfShapes(force=false){
-    if(!illustratedOn && !force)return;
-    const age=Date.now()-(osmCache?.savedAt||0);
-    if(!force&&Array.isArray(osmCache?.features)&&age<7*86400000){osmShapes=osmCache.features.filter(normalShape);refreshCourseArtwork();return;}
-    if(osmFetchInFlight||osmFetchAttempted&&!force)return;
-    osmFetchAttempted=true;osmFetchInFlight=true;osmFetchError=false;updateArtStatus();
-    const bbox='30.690,-97.692,30.723,-97.648';
-    const query=`[out:json][timeout:22];(way["golf"~"^(fairway|green|bunker|tee|rough|water_hazard|lateral_water_hazard)$"](${bbox});way["natural"="water"](${bbox}););out geom;`;
-    const endpoints=['https://overpass.kumi.systems/api/interpreter','https://overpass-api.de/api/interpreter'];
-    let fetched=null;
-    for(const ep of endpoints){
-      try{
-        const controller=new AbortController(),limit=setTimeout(()=>controller.abort(),12000);
-        let response;
-        try{response=await fetch(ep+'?data='+encodeURIComponent(query),{signal:controller.signal,headers:{Accept:'application/json'}});}finally{clearTimeout(limit);}
-        if(!response.ok)throw Error('Map service '+response.status);
-        fetched=await response.json();break;
-      }catch(e){/* Try alternate data host, then allow tracing locally. */}
-    }
-    if(fetched&&Array.isArray(fetched.elements)){
-      const raw=fetched.elements.filter(e=>{if(e.type!=='way'||!Array.isArray(e.geometry)||e.geometry.length<4)return false;const a=e.geometry[0],z=e.geometry[e.geometry.length-1];return Math.abs(a.lat-z.lat)<0.000001&&Math.abs(a.lon-z.lon)<0.000001;});
-      const seen=new Set();
-      osmShapes=raw.map(e=>{
-        const g=e.tags?.golf,n=e.tags?.natural;
-        const type=({water_hazard:'water',lateral_water_hazard:'water'})[g]||g||(n==='water'?'water':null);
-        const points=e.geometry.map(p=>({lat:p.lat,lng:p.lon}));
-        return {id:'osm-'+e.id,type,points,source:'OpenStreetMap'};
-      }).filter(f=>normalShape(f)&&!seen.has(f.id)&&seen.add(f.id)).slice(0,600);
-      osmCache={savedAt:Date.now(),features:osmShapes};
-      try{localStorage.setItem(OSM_CACHE_STORAGE,JSON.stringify(osmCache));}catch{/* still available in memory */}
-      osmFetchError=false;
-      if(force)showToast(osmShapes.length?`Loaded ${osmShapes.length} mapped course features.`:'No usable community outlines in this area; trace from satellite.');
-    }else{osmFetchError=true;if(force)showToast('Community map data unavailable. Use Draw Hole to create outlines.');}
-    osmFetchInFlight=false;refreshCourseArtwork();
+
+      if (pendingHeaderCompact === shouldCompact) return;
+      pendingHeaderCompact = shouldCompact;
+      clearTimeout(headerModeTimer);
+      headerModeTimer = setTimeout(() => {
+        const currentCompact = document.body.classList.contains("header-compact");
+        const stillMobile = MOBILE_HEADER_MEDIA.matches;
+        const stableCompact = stillMobile && (currentCompact ? window.scrollY > HEADER_COMPACT_EXIT_Y : window.scrollY >= HEADER_COMPACT_ENTER_Y);
+        if (stableCompact === pendingHeaderCompact) applyHeaderLayout(stableCompact);
+        else pendingHeaderCompact = null;
+      }, HEADER_MODE_SETTLE_MS);
+    });
   }
 
-  // UI bindings
-  $('prevHole').onclick=()=>moveHole(state.hole-1);
-  $('nextHole').onclick=()=>moveHole(state.hole+1);
-  $('nextHoleBottom').onclick=()=>moveHole(state.hole+1);
-  $('teeSelect').onchange=ev=>{state.tee=ev.target.value;save();render();};
-  $('scoreRows').addEventListener('click',ev=>{const btn=ev.target.closest('[data-action]');if(btn)updateScore(Number(btn.dataset.index),btn.dataset.action);});
-  $('setupBtn').onclick=setupPlayers;
-  $('roundBtn').onclick=roundMenu;
-  $('fullCardBtn').onclick=openCard;
-  $('closeModal').onclick=closeModal;
-  $('modalBackdrop').addEventListener('click',ev=>{if(ev.target===$('modalBackdrop'))closeModal();});
-  window.addEventListener('keydown',ev=>{if(ev.key==='Escape'){if(!$('modalBackdrop').hidden)closeModal();else if(mapMode==='draw')cancelDrawing();else setMode('normal');}else if($('modalBackdrop').hidden&&ev.key==='ArrowRight')moveHole(state.hole+1);else if($('modalBackdrop').hidden&&ev.key==='ArrowLeft')moveHole(state.hole-1);});
-  $('locateBtn').onclick=startGPS;
-  $('centerBtn').onclick=centerMap;
-  $('courseBtn').onclick=focusCourse;
-  $('layerBtn').onclick=toggleLayer;
-  $('animatedBtn').onclick=toggleAnimated;
-  $('expandBtn').onclick=toggleExpand;
-  $('measureBtn').onclick=()=>setMode(mapMode==='measure'?'normal':'measure');
-  $('markBtn').onclick=chooseMark;
-  $('drawBtn').onclick=showArtEditor;
-  $('undoVertex').onclick=undoDrawVertex;
-  $('finishShape').onclick=finishDrawing;
-  $('cancelShape').onclick=()=>cancelDrawing();
-  $('testBtn').onclick=()=>setMode(mapMode==='test'?'normal':'test');
+  function settleHeaderAfterOrientationChange() {
+    pendingHeaderCompact = null;
+    clearTimeout(headerModeTimer);
+    setTimeout(scheduleHeaderLayout, 180);
+  }
+
+  function showToast(message, kind = "info") {
+    const toast = $("#toast");
+    toast.textContent = message;
+    toast.dataset.kind = kind;
+    toast.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { toast.hidden = true; }, 4200);
+  }
+
+  function renderRoundIdentity() {
+    const bar = $("#roundIdentityBar");
+    if (!bar) return;
+    const activeView = document.body.dataset.activeView || "score";
+    const shownRound = activeView === "leaderboard" ? leaderboardRound() : state;
+    const savedResults = activeView === "leaderboard" && leaderboardIsSaved();
+    const playerCount = shownRound.players.length;
+    const groupCount = new Set(shownRound.players.map((player) => player.group)).size;
+    const contexts = {
+      setup: `${playerCount} player${playerCount === 1 ? "" : "s"} · ${groupCount} active group${groupCount === 1 ? "" : "s"}`,
+      score: `Group ${selectedGroup} · Hole ${selectedHole}`,
+      comments: `Hole ${selectedCommentHole} stories`,
+      leaderboard: `${savedResults ? "Saved standings" : "All groups"} · ${playerCount} player${playerCount === 1 ? "" : "s"}`,
+      tournament: `Event controls · ${playerCount} player${playerCount === 1 ? "" : "s"}`
+    };
+    $("#roundIdentityName").textContent = shownRound.roundName || "Berry Creek Round";
+    $("#roundIdentityDate").textContent = shownRound.date ? displayRosterDate(shownRound.date) : "";
+    $("#roundIdentityContext").textContent = contexts[activeView] || contexts.score;
+    const stateLabel = savedResults ? "Saved Round" : isLocked() ? "Round Locked" : "Round Active";
+    const stateEl = $("#roundIdentityState");
+    stateEl.lastChild.textContent = stateLabel;
+    stateEl.classList.toggle("is-locked", savedResults || isLocked());
+  }
+
+  function updateScrollAffordance(surface) {
+    const shell = surface.closest(".horizontal-scroll-shell");
+    if (!shell) return;
+    const overflow = surface.scrollWidth > surface.clientWidth + 4;
+    shell.classList.toggle("can-scroll-left", overflow && surface.scrollLeft > 5);
+    shell.classList.toggle("can-scroll-right", overflow && surface.scrollLeft + surface.clientWidth < surface.scrollWidth - 5);
+  }
+
+  function updateScrollAffordances() {
+    document.querySelectorAll("[data-scroll-surface]").forEach(updateScrollAffordance);
+  }
+
+  function setupScrollAffordances() {
+    document.querySelectorAll("[data-scroll-surface]").forEach((surface) => {
+      surface.addEventListener("scroll", () => updateScrollAffordance(surface), { passive: true });
+    });
+    if (typeof ResizeObserver === "function") {
+      const observer = new ResizeObserver((entries) => entries.forEach((entry) => updateScrollAffordance(entry.target)));
+      document.querySelectorAll("[data-scroll-surface]").forEach((surface) => observer.observe(surface));
+    }
+    window.addEventListener("resize", updateScrollAffordances);
+  }
+
+  function setConnection(mode) {
+    connectionMode = mode;
+    const labels = { connecting: "Connecting", live: "Live · synced", reconnecting: "Reconnecting", offline: "Offline" };
+    const status = $("#syncStatus");
+    status.className = `status-pill connection-pill is-${mode}`;
+    status.innerHTML = `<span class="status-dot"></span>${labels[mode]}`;
+    const queued = loadQueue().length;
+    const foot = $("#connectionFoot");
+    if (mode === "live") foot.textContent = "All connected scorekeepers are updating live.";
+    else if (queued) foot.textContent = `${queued} change${queued === 1 ? "" : "s"} waiting to sync.`;
+    else foot.textContent = mode === "reconnecting" ? "Trying to restore live scoring…" : "Scores entered offline will sync when the connection returns.";
+    renderSavedPlayers();
+    renderGroupProgress();
+  }
+
+  function stampedAction(action, admin) {
+    return {
+      type: action.type,
+      payload: action.payload || {},
+      meta: { at: new Date().toISOString(), actor: currentUser?.name || (admin ? (currentAdmin?.name || "Admin") : `Group ${selectedGroup} scorer`), group: selectedGroup }
+    };
+  }
+
+  async function postAction(action, admin) {
+    const headers = { "Content-Type": "application/json", "X-Scoring-Group": selectedGroup };
+    if (authToken) headers.Authorization = `Bearer ${authToken}`;
+    const adminOverride = admin || (adminUnlocked && !scorerLinkLocked && R.isScoringAction(action.type));
+    if (adminOverride) {
+      headers["X-Admin-Override"] = "1";
+    } else if (scorerLinkLocked && scorerToken) {
+      headers["X-Scoring-Token"] = scorerToken;
+    }
+    const response = await fetch("/api/action", { method: "POST", headers, body: JSON.stringify(action) });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      const error = new Error(body.error || "The change was not accepted");
+      error.serverRejected = true;
+      error.code = body.code || "";
+      error.conflict = body.conflict || null;
+      throw error;
+    }
+  }
+
+  async function databaseRequest(path, options = {}) {
+    if (!adminUnlocked) throw new Error("Admin access is required");
+    const headers = { ...(options.headers || {}), Authorization: `Bearer ${authToken}` };
+    if (options.body) headers["Content-Type"] = "application/json";
+    const response = await fetch(path, { ...options, headers });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      if (response.status === 401) {
+        lockAdminControls();
+        render();
+      }
+      const error = new Error(body.error || "The admin request failed");
+      error.code = body.code || "";
+      error.details = body;
+      throw error;
+    }
+    return body;
+  }
+
+  async function loadSavedPlayers() {
+    if (!adminUnlocked || connectionMode !== "live") {
+      savedPlayers = [];
+      renderSavedPlayers();
+      return;
+    }
+    savedPlayersLoading = true;
+    renderSavedPlayers();
+    try {
+      const body = await databaseRequest("/api/players", { cache: "no-store" });
+      savedPlayers = Array.isArray(body.players) ? body.players : [];
+      savedPlayersLoading = false;
+      renderSavedPlayers();
+    } catch (error) {
+      savedPlayers = [];
+      savedPlayersLoading = false;
+      renderSavedPlayers(error.message);
+    }
+  }
+
+  function displayRosterDate(value) {
+    if (!value) return "not provided";
+    const [year, month, day] = String(value).split("-").map(Number);
+    if (!year || !month || !day) return String(value);
+    return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" }).format(new Date(year, month - 1, day));
+  }
+
+  function renderIndexUpdateState() {
+    const button = $("#updateIndexesBtn");
+    const status = $("#indexUpdateStatus");
+    const readinessWarning = $("#indexReadinessWarning");
+    if (!button || !status) return;
+    button.textContent = indexUpdateInProgress ? "Updating…" : "Update Indexes";
+    button.disabled = indexUpdateInProgress || !adminUnlocked || connectionMode !== "live" || isLocked();
+    status.textContent = indexUpdateMessage;
+    status.hidden = !indexUpdateMessage;
+    status.classList.toggle("is-error", indexUpdateError);
+    if (readinessWarning) {
+      const check = readinessData?.indexCheck;
+      readinessWarning.textContent = check && !check.ok ? check.detail : "";
+      readinessWarning.hidden = !adminUnlocked || !check || check.ok;
+    }
+  }
+
+  function indexUpdateSummary(summary) {
+    const parts = [
+      `${summary.updated} updated`,
+      `${summary.unchanged} already current`,
+      `${summary.unmatched.length} not found`,
+      `${summary.ambiguous.length} ambiguous`
+    ];
+    const issues = [...summary.unmatched, ...summary.ambiguous];
+    const issueText = issues.length ? ` Review: ${issues.slice(0, 6).join(", ")}${issues.length > 6 ? ` and ${issues.length - 6} more` : ""}.` : "";
+    return `Roster date ${displayRosterDate(summary.sheetDate)}: ${parts.join(" · ")}.${summary.activePlayersUpdated ? ` ${summary.activePlayersUpdated} active-round player${summary.activePlayersUpdated === 1 ? " was" : "s were"} refreshed.` : ""}${issueText}`;
+  }
+
+  async function updateIndexesFromSheet() {
+    if (indexUpdateInProgress || !adminUnlocked || connectionMode !== "live" || isLocked()) return;
+    indexUpdateInProgress = true;
+    indexUpdateError = false;
+    indexUpdateMessage = "Checking the published roster and its Update Date…";
+    renderIndexUpdateState();
+    try {
+      let body;
+      try {
+        body = await databaseRequest("/api/players/update-indexes", { method: "POST", body: JSON.stringify({ confirmOutdated: false }) });
+      } catch (error) {
+        if (error.code !== "OUTDATED_INDEX_ROSTER") throw error;
+        const sheetDate = displayRosterDate(error.details?.sheetDate);
+        const currentDate = displayRosterDate(error.details?.currentDate);
+        const confirmed = window.confirm(`Are you sure you want to update, the roster is outdated.\n\nSheet update date: ${sheetDate}\nCurrent date: ${currentDate}`);
+        if (!confirmed) {
+          indexUpdateMessage = `Update canceled. The roster date is ${sheetDate}; no indexes were changed.`;
+          renderIndexUpdateState();
+          return;
+        }
+        body = await databaseRequest("/api/players/update-indexes", { method: "POST", body: JSON.stringify({ confirmOutdated: true }) });
+      }
+      savedPlayers = Array.isArray(body.players) ? body.players : savedPlayers;
+      await refreshState().catch(() => {});
+      indexUpdateMessage = indexUpdateSummary(body.summary);
+      indexUpdateError = Boolean(body.summary.unmatched.length || body.summary.ambiguous.length);
+      await loadReadiness();
+      showToast(body.summary.updated ? `${body.summary.updated} player index${body.summary.updated === 1 ? "" : "es"} updated.` : "All matched player indexes were already current.", "success");
+    } catch (error) {
+      indexUpdateMessage = error.message;
+      indexUpdateError = true;
+      showToast(error.message, "error");
+    } finally {
+      indexUpdateInProgress = false;
+      render();
+    }
+  }
+
+  async function loadSavedRounds() {
+    if (!adminUnlocked || connectionMode !== "live") {
+      savedRounds = [];
+      renderSavedRounds();
+      return;
+    }
+    try {
+      const body = await databaseRequest("/api/rounds", { cache: "no-store" });
+      savedRounds = Array.isArray(body.rounds) ? body.rounds : [];
+      renderSavedRounds();
+      renderRoundControls();
+      renderAdminState();
+    } catch (error) {
+      savedRounds = [];
+      renderSavedRounds(error.message);
+    }
+  }
+
+  async function loadShareTokens() {
+    if (!adminUnlocked || connectionMode !== "live") {
+      shareTokens = {};
+      renderGroupSharing();
+      return;
+    }
+    try {
+      const body = await databaseRequest("/api/share-tokens", { cache: "no-store" });
+      shareTokens = body.tokens || {};
+      renderGroupSharing();
+    } catch (error) {
+      shareTokens = {};
+      renderGroupSharing(error.message);
+    }
+  }
+
+  async function loadReadiness() {
+    if (!adminUnlocked || connectionMode !== "live") {
+      readinessData = null;
+      readinessLoading = false;
+      renderReadiness();
+      return;
+    }
+    readinessLoading = true;
+    renderReadiness();
+    try {
+      readinessData = await databaseRequest("/api/readiness", { cache: "no-store" });
+    } catch (error) {
+      readinessData = { error: error.message };
+    } finally {
+      readinessLoading = false;
+      renderReadiness();
+      renderIndexUpdateState();
+    }
+  }
+
+  async function loadAdmins() {
+    if (!adminUnlocked || connectionMode !== "live") {
+      admins = [];
+      currentAdmin = null;
+      renderAdminManagement();
+      return;
+    }
+    try {
+      const body = await databaseRequest("/api/admins", { cache: "no-store" });
+      admins = Array.isArray(body.admins) ? body.admins : [];
+      currentAdmin = body.currentAdmin || currentAdmin;
+      renderAdminManagement();
+      renderAdminState();
+    } catch (error) {
+      admins = [];
+      renderAdminManagement(error.message);
+    }
+  }
+
+  async function loadAdminData() {
+    await Promise.all([loadSavedPlayers(), loadSavedRounds(), loadShareTokens(), loadReadiness(), loadAdmins()]);
+    renderSavedPlayers();
+    renderAdminManagement();
+  }
+
+  async function loadPublicLeaderboard(options = {}) {
+    leaderboardLoading = true;
+    if (options.render !== false) renderLeaderboard();
+    try {
+      const response = await fetch("/api/public-leaderboard", { cache: "no-store" });
+      if (!response.ok) throw new Error("Could not load the public leaderboard");
+      const body = await response.json();
+      publicLeaderboard = {
+        source: ["active", "saved", "empty"].includes(body.source) ? body.source : "empty",
+        state: R.normalizeState(body.state),
+        savedAt: body.savedAt || "",
+        savedRoundId: body.savedRoundId || ""
+      };
+      return publicLeaderboard;
+    } finally {
+      leaderboardLoading = false;
+      if (options.render !== false) renderLeaderboard();
+    }
+  }
+
+  async function refreshState() {
+    const response = await fetch("/api/state", { cache: "no-store" });
+    if (!response.ok) throw new Error("Could not load round");
+    state = R.normalizeState(await response.json());
+    if (state.players.length) publicLeaderboard = { source: "active", state, savedAt: "", savedRoundId: "" };
+    else await loadPublicLeaderboard({ render: false }).catch(() => { publicLeaderboard = null; });
+    saveLocal();
+    render();
+  }
+
+  function scoreConflictLabel(value) { return value === "" || value === null || value === undefined ? "blank" : String(value); }
+
+  async function resolveScoreConflict(action, admin, error) {
+    const conflict = error.conflict || {};
+    await refreshState();
+    const player = state.players.find((item) => item.id === conflict.playerId);
+    const playerName = conflict.playerName?.trim() || player?.name?.trim() || "This player";
+    const currentScore = conflict.currentScore ?? player?.scores?.[Number(conflict.holeIndex)] ?? "";
+    const attemptedScore = conflict.attemptedScore ?? action.payload?.score ?? "";
+    const overwrite = window.confirm(`${playerName}'s Hole ${Number(conflict.holeIndex) + 1} score is now ${scoreConflictLabel(currentScore)} from another device. Replace it with ${scoreConflictLabel(attemptedScore)}?\n\nChoose Cancel to keep the score already on the server.`);
+    if (!overwrite) {
+      showToast(`Kept ${playerName}'s server score of ${scoreConflictLabel(currentScore)}.`, "success");
+      if (player?.id) setTouchFeedback(player.id, "Server score kept", "warning");
+      return true;
+    }
+    const forcedAction = { ...action, payload: { ...(action.payload || {}), expectedScore: currentScore, force: true } };
+    await postAction(forcedAction, admin);
+    await refreshState();
+    showToast(`${playerName}'s Hole ${Number(conflict.holeIndex) + 1} score was replaced.`, "success");
+    if (player?.id) setTouchFeedback(player.id, "Score replaced", "success");
+    return true;
+  }
+
+  async function dispatch(action, options = {}) {
+    const admin = options.admin ?? R.isAdminAction(action.type);
+    if (spectatorMode) { showToast("This leaderboard link is view only.", "error"); return false; }
+    if (R.ACCESS_ACTIONS.has(action.type) && !currentUser) { openAdminDialog(); showToast("Sign in to choose a group scorekeeper.", "error"); return false; }
+    if (R.isCommentAction(action.type) && !currentUser) { openAdminDialog(); showToast("Sign in to add or remove hole comments.", "error"); return false; }
+    if (R.isCommentAction(action.type) && connectionMode !== "live") { showToast("Reconnect to post a shared hole comment.", "error"); return false; }
+    if (isLocked() && !["SET_LOCKED", "SET_PHOTO_EMAIL", "CLEAR_ROUND", "START_FROM_SAVED"].includes(action.type)) { showToast("The round is locked.", "error"); return false; }
+    if (admin && !adminUnlocked) {
+      openAdminDialog();
+      showToast("Admin access is required for that change.", "error");
+      return false;
+    }
+    const localAction = stampedAction(action, admin || (adminUnlocked && !scorerLinkLocked && R.isScoringAction(action.type)));
+    state = R.applyAction(state, localAction);
+    saveLocal();
+    render();
+    if (connectionMode !== "live") {
+      const queue = loadQueue();
+      queue.push({ action, admin });
+      saveQueue(queue);
+      setConnection("offline");
+      showToast("Saved on this device and waiting to sync.");
+      return true;
+    }
+    try {
+      await postAction(action, admin);
+      return true;
+    } catch (error) {
+      if (error.serverRejected) {
+        if (error.code === "SCORE_CONFLICT") {
+          try { return await resolveScoreConflict(action, admin, error); }
+          catch (resolutionError) { showToast(resolutionError.message, "error"); return false; }
+        }
+        await refreshState().catch(() => {});
+        showToast(error.message, "error");
+        return false;
+      } else {
+        const queue = loadQueue();
+        queue.push({ action, admin });
+        saveQueue(queue);
+        setConnection("reconnecting");
+        showToast("Connection lost. The change is waiting to sync.", "error");
+        return true;
+      }
+    }
+  }
+
+  async function flushQueue() {
+    const queue = loadQueue();
+    if (!queue.length) return;
+    let rejected = 0;
+    for (const item of queue) {
+      try {
+        await postAction(item.action, item.admin);
+        if (item.action.type === "SET_SCORE") setScoreSyncStatus(item.action.payload.playerId, Number(item.action.payload.holeIndex), "synced");
+      }
+      catch (error) {
+        if (!error.serverRejected) throw error;
+        if (error.code === "SCORE_CONFLICT") {
+          try {
+            await resolveScoreConflict(item.action, item.admin, error);
+            if (item.action.type === "SET_SCORE") setScoreSyncStatus(item.action.payload.playerId, Number(item.action.payload.holeIndex), "synced");
+            continue;
+          } catch (_) {}
+        }
+        rejected += 1;
+        if (item.action.type === "SET_SCORE") setScoreSyncStatus(item.action.payload.playerId, Number(item.action.payload.holeIndex), "error");
+      }
+    }
+    saveQueue([]);
+    await refreshState();
+    showToast(rejected ? `${queue.length - rejected} offline changes synced; ${rejected} could not be applied.` : `${queue.length} offline change${queue.length === 1 ? "" : "s"} synced.`, rejected ? "error" : "success");
+  }
+
+  async function connect() {
+    if (!location.protocol.startsWith("http")) { setConnection("offline"); return; }
+    setConnection(connectionMode === "live" ? "live" : "connecting");
+    try {
+      await restoreSession();
+      await refreshState();
+      applyUserGroupDefault(Boolean(currentUser && !scorerLinkLocked));
+      render();
+      setConnection("live");
+      await flushQueue();
+      await loadAdminData();
+      eventSource?.close();
+      const eventUrl = new URL("/api/events", location.origin);
+      if (currentUser?.id && !currentUser.bootstrap) {
+        eventUrl.searchParams.set("account", currentUser.id);
+        eventUrl.searchParams.set("role", currentUser.role);
+      }
+      if (scorerLinkLocked) {
+        eventUrl.searchParams.set("scorer", "1");
+        eventUrl.searchParams.set("group", selectedGroup);
+        eventUrl.searchParams.set("token", scorerToken);
+      }
+      eventSource = new EventSource(eventUrl);
+      eventSource.addEventListener("state", (event) => {
+        const previousRoundId = state.roundId;
+        state = R.normalizeState(JSON.parse(event.data));
+        if (state.roundId !== previousRoundId) { groupWasChosen = false; applyUserGroupDefault(true); }
+        if (state.players.length) publicLeaderboard = { source: "active", state, savedAt: "", savedRoundId: "" };
+        else loadPublicLeaderboard().catch(() => {});
+        saveLocal();
+        setConnection("live");
+        render();
+      });
+      eventSource.addEventListener("presence", (event) => {
+        groupPresence = JSON.parse(event.data);
+        renderGroupProgress();
+      });
+      eventSource.onerror = () => setConnection(navigator.onLine ? "reconnecting" : "offline");
+    } catch (_) {
+      setConnection(navigator.onLine ? "reconnecting" : "offline");
+      render();
+    }
+  }
+
+  function nextAvailableGroup() { return R.GROUPS.find((g) => groupPlayers(g).length < R.MAX_GROUP_SIZE) || "A"; }
+
+  function renderPlayerEntryPanels() {
+    const savedOpen = playerEntryMode === "saved";
+    const guestOpen = playerEntryMode === "guest";
+    $("#savedPlayerEntryPanel").hidden = !savedOpen;
+    $("#guestEntryPanel").hidden = !guestOpen;
+    $("#addPlayerBtn").setAttribute("aria-expanded", String(savedOpen));
+    $("#addGuestBtn").setAttribute("aria-expanded", String(guestOpen));
+  }
+
+  function openPlayerEntry(mode) {
+    if (!adminUnlocked || isLocked()) return;
+    if (mode === "guest" && state.players.length >= R.MAX_PLAYERS) return showValidation("Maximum of 30 players reached.");
+    playerEntryMode = mode;
+    renderPlayerEntryPanels();
+    const panel = mode === "guest" ? $("#guestEntryPanel") : $("#savedPlayerEntryPanel");
+    const firstInput = mode === "guest" ? $("#guestPlayerName") : $("#savedPlayerName");
+    requestAnimationFrame(() => {
+      panel.scrollIntoView({ behavior: "smooth", block: "center" });
+      firstInput.focus({ preventScroll: true });
+    });
+  }
+
+  function closePlayerEntry() {
+    playerEntryMode = "";
+    renderPlayerEntryPanels();
+  }
+
+  async function addGuest(event) {
+    event.preventDefault();
+    if (state.players.length >= R.MAX_PLAYERS) return showValidation("Maximum of 30 players reached.");
+    const name = $("#guestPlayerName").value.trim();
+    const handicapText = $("#guestPlayerGhin").value.trim();
+    const group = $("#guestPlayerGroup").value;
+    if (!name) return showToast("Enter the guest's name.", "error");
+    const ghin = requiredHandicapValue(handicapText);
+    if (ghin === null) return showToast("Enter the guest's Handicap Index from +10.0 through 54.0, such as 12.4 or +4.2.", "error");
+    if (!R.GROUPS.includes(group) || groupPlayers(group).length >= R.MAX_GROUP_SIZE) return showValidation(`Group ${group} already has five players.`);
+    const player = R.normalizePlayer({
+      id: makeId(),
+      name,
+      ghin,
+      isGuest: true,
+      inGame: true,
+      teeKey: $("#guestPlayerTee").value,
+      group
+    });
+    const accepted = await dispatch({ type: "ADD_PLAYER", payload: { player } });
+    if (!accepted) return;
+    try {
+      const body = await databaseRequest("/api/guest-accounts", { method: "POST", body: JSON.stringify({ activePlayerId: player.id }) });
+      $("#guestPlayerName").value = "";
+      $("#guestPlayerGhin").value = "";
+      playerEntryMode = "";
+      render();
+      renderDraftHandicaps();
+      showToast(`${name} added to Group ${group}. Login: ${body.account.username} · PIN 1234.`, "success");
+    } catch (error) {
+      await dispatch({ type: "REMOVE_PLAYER", payload: { playerId: player.id } });
+      showToast(`${error.message} The guest was not added.`, "error");
+    }
+  }
+  function showValidation(message) { const el = $("#playerLimit"); el.textContent = message; el.hidden = false; }
+
+  function teeOptions(selected) {
+    const selectedKey = E.normalizeTeeKey(E.COURSE, selected);
+    return teeEntries.map(([key, tee]) => `<option value="${key}" ${key === selectedKey ? "selected" : ""}>${esc(tee.name)}</option>`).join("");
+  }
+
+  function renderDraftHandicaps() {
+    const saved = $("#savedPlayerHdcp");
+    const guest = $("#guestPlayerHdcp");
+    syncPlusHandicapToggle($("#savedPlayerGhin"), $("#savedPlayerPlus"));
+    syncPlusHandicapToggle($("#guestPlayerGhin"), $("#guestPlayerPlus"));
+    if (saved) saved.textContent = displayPlayingHandicap(hcpForValues($("#savedPlayerGhin").value, $("#savedPlayerTee").value));
+    if (guest) guest.textContent = displayPlayingHandicap(hcpForValues($("#guestPlayerGhin").value, $("#guestPlayerTee").value));
+  }
+  function groupOptions(selected, currentPlayerId) {
+    return R.GROUPS.map((group) => {
+      const count = state.players.filter((player) => player.group === group && player.id !== currentPlayerId).length;
+      return `<option value="${group}" ${group === selected ? "selected" : ""} ${count >= R.MAX_GROUP_SIZE && group !== selected ? "disabled" : ""}>${group} (${count + (group === selected ? 1 : 0)}/5)</option>`;
+    }).join("");
+  }
+
+  function savedGroupOptions(selected) {
+    return R.GROUPS.map((group) => {
+      const count = groupPlayers(group).length;
+      return `<option value="${group}" ${group === selected ? "selected" : ""} ${count >= R.MAX_GROUP_SIZE ? "disabled" : ""}>${group} (${count}/5)</option>`;
+    }).join("");
+  }
+
+  function renderSavedPlayerAssignment(canEdit = false) {
+    const groupSelect = $("#savedRosterGroup");
+    const addButton = $("#addSelectedSavedPlayerBtn");
+    if (!groupSelect || !addButton) return;
+    const selectedPlayer = savedPlayers.find((player) => player.id === selectedSavedPlayerId);
+    const activePlayer = selectedPlayer ? state.players.find((player) => player.directoryId === selectedPlayer.id) : null;
+    if (!R.GROUPS.includes(savedRosterGroupSelection) || groupPlayers(savedRosterGroupSelection).length >= R.MAX_GROUP_SIZE) savedRosterGroupSelection = nextAvailableGroup();
+    groupSelect.innerHTML = savedGroupOptions(savedRosterGroupSelection);
+    groupSelect.value = savedRosterGroupSelection;
+    const groupFull = groupPlayers(savedRosterGroupSelection).length >= R.MAX_GROUP_SIZE;
+    groupSelect.disabled = !canEdit || state.players.length >= R.MAX_PLAYERS;
+    addButton.disabled = !canEdit || !selectedPlayer || Boolean(activePlayer) || state.players.length >= R.MAX_PLAYERS || groupFull;
+    addButton.textContent = activePlayer ? `In Group ${activePlayer.group}` : selectedPlayer ? "Add to group" : "Select player";
+    addButton.title = selectedPlayer ? `${selectedPlayer.name} → Group ${savedRosterGroupSelection}` : "Select a saved player below first";
+  }
+
+  function renderSavedPlayers(errorMessage = "") {
+    const list = $("#savedPlayerList");
+    const status = $("#playerDatabaseStatus");
+    const search = $("#savedPlayerSearch");
+    if (!list || !status || !search) return;
+    renderIndexUpdateState();
+    list.replaceChildren();
+    search.disabled = !adminUnlocked || connectionMode !== "live";
+    search.value = savedPlayerSearch;
+    renderSavedPlayerAssignment(false);
+    if (!adminUnlocked) {
+      status.textContent = "Sign in as an admin to view saved players and manage their logins.";
+      return;
+    }
+    if (connectionMode !== "live") {
+      status.textContent = "The saved player database requires a live connection.";
+      return;
+    }
+    if (savedPlayersLoading) {
+      status.textContent = "Loading saved players…";
+      list.innerHTML = Array.from({ length: 4 }, () => '<article class="saved-player-row skeleton-roster-row" aria-hidden="true"><span class="skeleton-block skeleton-name"></span><span class="skeleton-block"></span><span class="skeleton-block"></span><span class="skeleton-block skeleton-wide"></span><span class="skeleton-block"></span></article>').join("");
+      return;
+    }
+    if (errorMessage) {
+      status.textContent = errorMessage;
+      list.innerHTML = '<div class="empty-state">Saved players could not be loaded.</div>';
+      return;
+    }
+    const query = savedPlayerSearch.trim().toLowerCase();
+    const filtered = savedPlayers.filter((player) => player.name.toLowerCase().includes(query));
+    if (selectedSavedPlayerId && !filtered.some((player) => player.id === selectedSavedPlayerId)) selectedSavedPlayerId = "";
+    if (!selectedSavedPlayerId && query && filtered.length === 1 && !state.players.some((player) => player.directoryId === filtered[0].id)) selectedSavedPlayerId = filtered[0].id;
+    const activeCount = savedPlayers.filter((saved) => state.players.some((player) => player.directoryId === saved.id)).length;
+    status.textContent = `${savedPlayers.length} saved player${savedPlayers.length === 1 ? "" : "s"} · ${activeCount} in this round`;
+    const canEdit = adminUnlocked && connectionMode === "live" && !isLocked();
+    renderSavedPlayerAssignment(canEdit);
+    if (!filtered.length) {
+      list.innerHTML = `<div class="empty-state">${savedPlayers.length ? "No saved players match that search." : "No saved players yet. Use Add Player above to create the reusable roster."}</div>`;
+      return;
+    }
+    filtered.forEach((saved) => {
+      const linkedAdmin = admins.find((admin) => admin.playerId === saved.id);
+      const activePlayer = state.players.find((player) => player.directoryId === saved.id);
+      const isSelected = selectedSavedPlayerId === saved.id;
+      const row = document.createElement("article");
+      row.className = `saved-player-row${isSelected ? " is-selected" : ""}`;
+      row.dataset.savedPlayerId = saved.id;
+      row.innerHTML = `<label class="saved-player-name">Name<input class="saved-name" type="text" maxlength="40" value="${esc(saved.name)}" ${canEdit ? "" : "disabled"}></label>
+        <div class="handicap-field saved-ghin-field"><span class="field-label">GHIN IDX</span><div class="handicap-input-row"><input class="saved-ghin" type="text" maxlength="6" inputmode="decimal" value="${displayIndex(saved.ghin)}" placeholder="12.4" aria-label="GHIN Index for ${esc(saved.name)}" ${canEdit ? "" : "disabled"}><button class="saved-ghin-plus plus-handicap-toggle" type="button" aria-pressed="false" aria-label="Mark ${esc(saved.name)} as plus handicap" ${canEdit ? "" : "disabled"}><span aria-hidden="true">+</span><span class="plus-label">HCP</span></button></div></div>
+        <div class="playing-hcp form-hcp"><span>HDCP</span><strong>${displayPlayingHandicap(hcpForValues(saved.ghin, saved.teeKey))}</strong></div>
+        <label class="saved-tee-field">Tee<select class="saved-tee" ${canEdit ? "" : "disabled"}>${teeOptions(saved.teeKey)}</select></label>
+        <div class="saved-player-actions"><button class="button button-quiet create-player-invite" type="button" ${canEdit && !linkedAdmin ? "" : "disabled"}>${linkedAdmin ? "Admin-linked login" : saved.loginConfigured ? "Create reset link" : "Create login link"}</button><button class="button ${isSelected ? "button-primary" : "button-quiet"} select-saved-player" type="button" ${canEdit && !activePlayer ? "" : "disabled"}>${activePlayer ? `In Group ${activePlayer.group}` : isSelected ? "Selected" : "Select"}</button><button class="button button-quiet delete-saved-player" type="button" ${canEdit && !linkedAdmin ? "" : "disabled"}>${linkedAdmin ? "Unlink before deleting" : "Delete"}</button></div>`;
+      const name = row.querySelector(".saved-name");
+      const ghin = row.querySelector(".saved-ghin");
+      const plusHandicap = row.querySelector(".saved-ghin-plus");
+      const tee = row.querySelector(".saved-tee");
+      const handicap = row.querySelector(".playing-hcp strong");
+      syncPlusHandicapToggle(ghin, plusHandicap);
+      name.addEventListener("change", () => updateSavedPlayer(saved.id, { name: name.value }));
+      ghin.addEventListener("input", () => { syncPlusHandicapToggle(ghin, plusHandicap); handicap.textContent = displayPlayingHandicap(hcpForValues(ghin.value, tee.value)); });
+      ghin.addEventListener("change", () => {
+        const value = requiredHandicapValue(ghin.value);
+        if (value === null) { render(); return showToast("Enter a valid GHIN Index from +10.0 through 54.0.", "error"); }
+        updateSavedPlayer(saved.id, { ghin: value });
+      });
+      plusHandicap.addEventListener("click", () => { togglePlusHandicapInput(ghin, plusHandicap); updateSavedPlayer(saved.id, { ghin: E.parseHandicapInput(ghin.value) }); });
+      tee.addEventListener("change", () => { handicap.textContent = displayPlayingHandicap(hcpForValues(ghin.value, tee.value)); updateSavedPlayer(saved.id, { teeKey: tee.value }); });
+      row.querySelector(".create-player-invite").addEventListener("click", () => createPlayerInvitation(saved.id));
+      row.querySelector(".select-saved-player").addEventListener("click", () => { selectedSavedPlayerId = saved.id; renderSavedPlayers(); });
+      row.querySelector(".delete-saved-player").addEventListener("click", () => deleteSavedPlayer(saved.id));
+      list.append(row);
+    });
+  }
+
+  async function createSavedPlayer(event) {
+    event.preventDefault();
+    const name = $("#savedPlayerName").value.trim();
+    const ghin = requiredHandicapValue($("#savedPlayerGhin").value);
+    const teeKey = $("#savedPlayerTee").value;
+    if (!name) return showToast("Enter a player name before saving.", "error");
+    if (ghin === null) return showToast("Enter a valid GHIN Index from +10.0 through 54.0 before saving.", "error");
+    if (!teeKey) return showToast("Choose a tee before saving.", "error");
+    try {
+      const body = await databaseRequest("/api/players", {
+        method: "POST",
+        body: JSON.stringify({ name, ghin, teeKey })
+      });
+      savedPlayers = [...savedPlayers, body.player].sort((a, b) => a.name.localeCompare(b.name));
+      selectedSavedPlayerId = body.player.id;
+      savedPlayerSearch = body.player.name;
+      $("#savedPlayerName").value = "";
+      $("#savedPlayerGhin").value = "";
+      playerEntryMode = "";
+      render();
+      await createPlayerInvitation(body.player.id, { newlySaved: true });
+    } catch (error) {
+      showToast(error.message, "error");
+    }
+  }
+
+  async function createPlayerInvitation(playerId, options = {}) {
+    const saved = savedPlayers.find((player) => player.id === playerId);
+    if (!saved) return;
+    if (location.protocol !== "https:" && !["localhost", "127.0.0.1"].includes(location.hostname)) return showToast("Open the hosted HTTPS app before creating a private player link.", "error");
+    try {
+      const body = await databaseRequest("/api/player-invitations", { method: "POST", body: JSON.stringify({ playerId, hours: 24 }) });
+      const url = new URL(location.origin + location.pathname);
+      url.hash = `player-invite=${body.invitation.token}`;
+      playerInviteLink = url.toString();
+      playerInvitePlayer = saved;
+      $("#playerInviteLinkTitle").textContent = body.invitation.resetsExistingLogin ? `Reset ${saved.name}'s login` : `Set up ${saved.name}'s login`;
+      $("#playerInviteUrl").value = playerInviteLink;
+      $("#playerInviteExpiry").textContent = `Single-use link · Expires ${new Date(body.invitation.expiresAt).toLocaleString()}${body.invitation.resetsExistingLogin ? " · Current login works until this link is accepted" : ""}`;
+      $("#playerInviteLinkDialog").showModal();
+      showToast(options.newlySaved ? `${saved.name} was saved and their private setup link is ready.` : `Private ${saved.loginConfigured ? "reset" : "setup"} link created for ${saved.name}.`, "success");
+    } catch (error) {
+      showToast(options.newlySaved ? `${saved.name} was saved, but the private setup link could not be created: ${error.message}` : error.message, "error");
+    }
+  }
+
+  async function updateSavedPlayer(id, patch) {
+    if (!adminUnlocked || connectionMode !== "live" || isLocked()) return;
+    try {
+      const body = await databaseRequest(`/api/players/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(patch) });
+      savedPlayers = savedPlayers.map((player) => player.id === id ? body.player : player).sort((a, b) => a.name.localeCompare(b.name));
+      const linkedPlayers = state.players.filter((player) => player.directoryId === id);
+      for (const player of linkedPlayers) {
+        await dispatch({ type: "UPDATE_PLAYER", payload: { playerId: player.id, directoryId: id, name: body.player.name, ghin: body.player.ghin, teeKey: body.player.teeKey } });
+      }
+      render();
+      showToast(`${body.player.name}'s saved details were updated.`, "success");
+    } catch (error) {
+      render();
+      showToast(error.message, "error");
+    }
+  }
+
+  async function addSavedPlayerToRound(id, group) {
+    const saved = savedPlayers.find((player) => player.id === id);
+    if (!saved) return;
+    if (state.players.some((player) => player.directoryId === id)) return showToast(`${saved.name} is already in this round.`, "error");
+    if (state.players.length >= R.MAX_PLAYERS) return showValidation("Maximum of 30 players reached.");
+    if (!R.GROUPS.includes(group) || groupPlayers(group).length >= R.MAX_GROUP_SIZE) return showValidation(`Group ${group} already has five players.`);
+    const player = R.normalizePlayer({ id: makeId(), directoryId: saved.id, name: saved.name, ghin: saved.ghin, teeKey: saved.teeKey, group });
+    if (!await dispatch({ type: "ADD_PLAYER", payload: { player } })) return;
+    selectedSavedPlayerId = "";
+    savedPlayerSearch = "";
+    renderSavedPlayers();
+    showToast(`${saved.name} added to Group ${group}.`, "success");
+  }
+
+  async function deleteSavedPlayer(id) {
+    const saved = savedPlayers.find((player) => player.id === id);
+    if (!saved || !window.confirm(`Delete ${saved.name} from the saved player database? Their current-round scores will remain.`)) return;
+    try {
+      await databaseRequest(`/api/players/${encodeURIComponent(id)}`, { method: "DELETE" });
+      const linkedPlayers = state.players.filter((player) => player.directoryId === id);
+      savedPlayers = savedPlayers.filter((player) => player.id !== id);
+      if (selectedSavedPlayerId === id) selectedSavedPlayerId = "";
+      for (const player of linkedPlayers) await dispatch({ type: "UPDATE_PLAYER", payload: { playerId: player.id, directoryId: "" } });
+      render();
+      showToast(`${saved.name} deleted from the saved player database.`, "success");
+    } catch (error) {
+      showToast(error.message, "error");
+    }
+  }
+
+  function renderSetupWarnings() {
+    const warnings = [];
+    const missing = state.players.filter((player) => !player.name.trim()).length;
+    const names = state.players.filter((player) => !player.isGuest).map((player) => player.name.trim().toLowerCase()).filter(Boolean);
+    const duplicates = [...new Set(names.filter((name, index) => names.indexOf(name) !== index))];
+    if (missing) warnings.push(`${missing} player${missing === 1 ? " is" : "s are"} missing a name.`);
+    if (duplicates.length) warnings.push(`Duplicate player name${duplicates.length === 1 ? "" : "s"}: ${duplicates.join(", ")}.`);
+    const panel = $("#setupWarnings");
+    panel.hidden = !warnings.length;
+    panel.innerHTML = warnings.map((warning) => `<p>⚠ ${esc(warning)}</p>`).join("");
+  }
+
+  function renderPlayers() {
+    const list = $("#playerList");
+    list.replaceChildren();
+    state.players.forEach((player, index) => {
+      const row = $("#playerRowTemplate").content.firstElementChild.cloneNode(true);
+      row.classList.toggle("is-not-in-game", !player.inGame);
+      row.querySelector(".player-number").textContent = index + 1;
+      const name = row.querySelector(".player-name"); name.value = player.name;
+      const ghinInput = row.querySelector(".player-ghin"); ghinInput.value = displayIndex(player.ghin);
+      const plusHandicap = row.querySelector(".player-ghin-plus"); syncPlusHandicapToggle(ghinInput, plusHandicap);
+      const tee = row.querySelector(".player-tee"); tee.innerHTML = teeOptions(player.teeKey);
+      const group = row.querySelector(".player-group"); group.innerHTML = groupOptions(player.group, player.id);
+      const typeBadge = row.querySelector(".player-type-badge"); typeBadge.hidden = !player.isGuest;
+      const notInGame = row.querySelector(".player-in-game"); notInGame.checked = !player.inGame;
+      row.querySelector(".playing-hcp strong").textContent = displayPlayingHandicap(hcp(player));
+      name.addEventListener("change", (event) => dispatch({ type: "UPDATE_PLAYER", payload: { playerId: player.id, name: event.target.value } }));
+      ghinInput.addEventListener("input", () => syncPlusHandicapToggle(ghinInput, plusHandicap));
+      ghinInput.addEventListener("change", (event) => dispatch({ type: "UPDATE_PLAYER", payload: { playerId: player.id, ghin: E.parseHandicapInput(event.target.value) } }));
+      plusHandicap.addEventListener("click", () => { togglePlusHandicapInput(ghinInput, plusHandicap); dispatch({ type: "UPDATE_PLAYER", payload: { playerId: player.id, ghin: E.parseHandicapInput(ghinInput.value) } }); });
+      tee.addEventListener("change", (event) => dispatch({ type: "UPDATE_PLAYER", payload: { playerId: player.id, teeKey: event.target.value } }));
+      group.addEventListener("change", (event) => dispatch({ type: "UPDATE_PLAYER", payload: { playerId: player.id, group: event.target.value } }));
+      notInGame.addEventListener("change", (event) => dispatch({ type: "UPDATE_PLAYER", payload: { playerId: player.id, inGame: !event.target.checked } }));
+      row.querySelector(".remove-player").addEventListener("click", () => dispatch({ type: "REMOVE_PLAYER", payload: { playerId: player.id } }));
+      list.append(row);
+    });
+    if (!state.players.length) list.innerHTML = '<div class="empty-state">No players yet. Add up to 30 golfers.</div>';
+    $("#playerLimit").hidden = true;
+    $("#addGuestBtn").disabled = state.players.length >= R.MAX_PLAYERS;
+    $("#saveGuestBtn").disabled = state.players.length >= R.MAX_PLAYERS;
+    $("#groupCounts").innerHTML = R.GROUPS.map((group) => `<span>Group ${group}: <strong>${groupPlayers(group).length}/5</strong></span>`).join("");
+    renderSetupWarnings();
+  }
+
+  function renderGroupSelectors() {
+    const select = $("#activeGroupSelect");
+    select.innerHTML = R.GROUPS.map((group) => `<option value="${group}" ${group === selectedGroup ? "selected" : ""}>Group ${group} · ${groupPlayers(group).length} player${groupPlayers(group).length === 1 ? "" : "s"}</option>`).join("");
+    select.disabled = scorerLinkLocked;
+    const notice = $("#scorerLinkNotice");
+    notice.hidden = false;
+    const selectedScorekeeper = state.players.find((player) => player.id === state.settings.scorekeepers[selectedGroup]);
+    const signedInPlayer = currentRoundPlayer();
+    if (scorerLinkLocked && !scorerLinkExpired()) notice.textContent = `This legacy scoring link is assigned to Group ${selectedGroup}.`;
+    else if (scorerLinkLocked) notice.textContent = "This legacy scoring link has expired. Open the normal website and sign in.";
+    else if (adminUnlocked) notice.textContent = selectedScorekeeper ? `Group ${selectedGroup} scorekeeper: ${nameOf(selectedScorekeeper, 0)}. Admin scoring access is active.` : `Group ${selectedGroup} has no scorekeeper yet. As an admin, you may select one below or enter scores directly.`;
+    else if (!currentUser) notice.textContent = selectedScorekeeper ? `Viewing Group ${selectedGroup}. ${nameOf(selectedScorekeeper, 0)} is the scorekeeper. Sign in to use your player access.` : `Viewing Group ${selectedGroup}. No scorekeeper is assigned; a player in this group may sign in and choose one.`;
+    else if (!signedInPlayer) notice.textContent = `Signed in as ${currentUser.name}, but you are not assigned to the active round. You may browse every group.`;
+    else if (signedInPlayer.group !== selectedGroup) notice.textContent = `Viewing Group ${selectedGroup}. Your group is Group ${signedInPlayer.group}; you may browse both groups.`;
+    else if (isSelectedGroupScorekeeper()) notice.textContent = `You are the Group ${selectedGroup} scorekeeper. Scoring controls are active.`;
+    else if (selectedScorekeeper) notice.textContent = `${nameOf(selectedScorekeeper, 0)} is the Group ${selectedGroup} scorekeeper. You may browse the scorecard.`;
+    else notice.textContent = `Group ${selectedGroup} has no scorekeeper. Select SK beside a group member to assign one.`;
+    [$("#holeSelect"), $("#mobileHoleSelect")].forEach((holes) => {
+      if (!holes.options.length) holes.innerHTML = E.COURSE.holes.map((hole) => `<option value="${hole.number}">Hole ${hole.number}</option>`).join("");
+      holes.value = selectedHole;
+    });
+  }
+
+  function renderHoleBanner(players) {
+    const base = E.COURSE.holes[selectedHole - 1];
+    const details = [...new Set(players.map((player) => { const hole = E.holesForPlayer(E.COURSE, player)[selectedHole - 1]; return `${teeOf(player).name}: ${hole.yards} yds · SI ${hole.strokeIndex}`; }))];
+    const kpWinnerId = state.settings.kpWinners[String(selectedHole)];
+    const kpWinner = state.players.find((player) => player.id === kpWinnerId);
+    const kpClaimState = kpWinner ? E.kpClaimStatus(kpWinner, E.COURSE, state.settings, selectedHole - 1, state.players) : "none";
+    const kpName = kpWinner ? esc(nameOf(kpWinner, state.players.indexOf(kpWinner))) : "";
+    const kpText = kpClaimState === "kp" ? `KP: ${kpName} · 1 tic` : kpClaimState === "pending" ? `KP Pending: ${kpName} · 0 tics` : kpClaimState === "marked" ? `KP Marked: ${kpName} · 0 tics` : "KP: Open";
+    const priorKpNames = (state.settings.kpClaims[String(selectedHole)] || []).filter((playerId) => playerId !== kpWinnerId).map((playerId) => {
+      const player = state.players.find((item) => item.id === playerId);
+      return player ? esc(nameOf(player, state.players.indexOf(player))) : "";
+    }).filter(Boolean);
+    const kpStatus = KP_HOLES.includes(selectedHole) ? `<span class="kp-status">${kpText}</span>${priorKpNames.length ? `<span class="kp-status">KP Marked: ${priorKpNames.join(" / ")} · 0 tics</span>` : ""}` : "";
+    const skin = E.skinResult(state.players, E.COURSE, state.settings, selectedHole - 1);
+    const skinWinner = state.players.find((player) => player.id === skin.winnerId);
+    const pendingSkinNames = E.skinPendingLeaders(state.players, E.COURSE, state.settings, selectedHole - 1).map((playerId) => {
+      const player = state.players.find((item) => item.id === playerId);
+      return player ? esc(nameOf(player, state.players.indexOf(player))) : "";
+    }).filter(Boolean);
+    const skinText = skin.status === "awarded"
+      ? `Skin: ${esc(nameOf(skinWinner, state.players.indexOf(skinWinner)))}`
+      : skin.status === "tie"
+        ? "Skin: No skin (tie)"
+        : pendingSkinNames.length > 1
+          ? "Skin: No skin (yet)"
+          : `Skin Pending: ${pendingSkinNames.length ? pendingSkinNames[0] : "Waiting for scores"}`;
+    $("#holeBanner").innerHTML = `<strong>Hole ${selectedHole} · Par ${base.par}</strong><span>${details.length ? details.join("  |  ") : "Add players to see tee details."}</span><span class="skin-status">${skinText}</span>${kpStatus}`;
+    const missing = players.filter((player) => !player.scores[selectedHole - 1]).length;
+    $("#holeWarning").textContent = missing ? `${missing} score${missing === 1 ? "" : "s"} still missing on this hole.` : players.length ? "All group scores entered for this hole. ✓" : "";
+    $("#holeWarning").classList.toggle("complete", Boolean(players.length && !missing));
+  }
+
+  function playEagleFallback() {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return;
+    celebrationAudioContext ||= new AudioContextClass();
+    const ctx = celebrationAudioContext;
+    ctx.resume().catch(() => {});
+    const start = ctx.currentTime;
+    const master = ctx.createGain();
+    master.gain.setValueAtTime(0.0001, start);
+    master.gain.exponentialRampToValueAtTime(0.18, start + 0.025);
+    master.gain.exponentialRampToValueAtTime(0.0001, start + 1.35);
+    master.connect(ctx.destination);
+    [0, 0.42, 0.83].forEach((delay, index) => {
+      const oscillator = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const noteStart = start + delay;
+      oscillator.type = "sawtooth";
+      oscillator.frequency.setValueAtTime(2200 - index * 180, noteStart);
+      oscillator.frequency.exponentialRampToValueAtTime(850 - index * 80, noteStart + 0.38);
+      gain.gain.setValueAtTime(0.0001, noteStart);
+      gain.gain.exponentialRampToValueAtTime(0.32, noteStart + 0.018);
+      gain.gain.exponentialRampToValueAtTime(0.0001, noteStart + 0.42);
+      oscillator.connect(gain).connect(master);
+      oscillator.start(noteStart);
+      oscillator.stop(noteStart + 0.44);
+    });
+  }
+
+  function playEagleCelebration() {
+    if (!preferences.sound) return;
+    eagleAudio ||= new Audio("eagle-call.wav");
+    eagleAudio.preload = "auto";
+    eagleAudio.volume = 0.72;
+    eagleAudio.pause();
+    eagleAudio.currentTime = 0;
+    eagleAudio.play().catch(playEagleFallback);
+  }
+
+  function playBirdieTweets() {
+    if (!preferences.sound) return;
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return;
+    celebrationAudioContext ||= new AudioContextClass();
+    const ctx = celebrationAudioContext;
+    ctx.resume().catch(() => {});
+    const start = ctx.currentTime;
+    const master = ctx.createGain();
+    master.gain.setValueAtTime(0.18, start);
+    master.connect(ctx.destination);
+    [0, 0.29].forEach((delay, index) => {
+      const oscillator = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const noteStart = start + delay;
+      oscillator.type = "sine";
+      oscillator.frequency.setValueAtTime(index ? 1850 : 1700, noteStart);
+      oscillator.frequency.exponentialRampToValueAtTime(index ? 2550 : 2350, noteStart + 0.09);
+      oscillator.frequency.exponentialRampToValueAtTime(index ? 2100 : 1950, noteStart + 0.2);
+      gain.gain.setValueAtTime(0.0001, noteStart);
+      gain.gain.exponentialRampToValueAtTime(0.5, noteStart + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, noteStart + 0.22);
+      oscillator.connect(gain).connect(master);
+      oscillator.start(noteStart);
+      oscillator.stop(noteStart + 0.23);
+    });
+  }
+
+  async function setScore(playerId, score) {
+    if (!canScore()) return showToast(isLocked() ? "The round is locked." : scorerLinkExpired() ? "This legacy scorekeeper link has expired." : currentUser ? "Only this group's selected scorekeeper or an admin can enter scores." : "Sign in as the selected scorekeeper or an admin to enter scores.", "error");
+    const player = state.players.find((item) => item.id === playerId);
+    const holeIndex = selectedHole - 1;
+    const par = E.COURSE.holes[holeIndex].par;
+    const expectedScore = player?.scores?.[holeIndex] ?? "";
+    const wasComplete = groupPlayers().length > 0 && groupPlayers().every((item) => item.scores[holeIndex] !== "");
+    const numeric = score === "" ? "" : Math.max(1, Math.min(20, Number(score) || 1));
+    if (numeric !== "" && numeric !== player?.scores[holeIndex] && (numeric <= par - 3 || numeric >= par + 5)) {
+      if (!window.confirm(`${nameOf(player, 0)}: confirm a score of ${numeric} on Hole ${selectedHole} (par ${par})?`)) return renderGroupScoring();
+    }
+    const isNewEagle = E.isInGame(player) && E.isEagle(numeric, par) && !E.isEagle(player?.scores[holeIndex], par);
+    const isNewBirdie = E.isInGame(player) && E.isBirdie(numeric, par) && !E.isBirdie(player?.scores[holeIndex], par);
+    if (isNewEagle) playEagleCelebration();
+    else if (isNewBirdie) playBirdieTweets();
+    setScoreSyncStatus(playerId, holeIndex, connectionMode === "live" ? "saving" : "pending");
+    renderGroupScoring();
+    const accepted = await dispatch({ type: "SET_SCORE", payload: { playerId, holeIndex, score: numeric, expectedScore } });
+    setScoreSyncStatus(playerId, holeIndex, accepted ? (connectionMode === "live" ? "synced" : "pending") : "error");
+    renderGroupScoring();
+    const isComplete = groupPlayers().length > 0 && groupPlayers().every((item) => item.scores[holeIndex] !== "");
+    if (accepted && !wasComplete && isComplete && preferences.autoAdvance && selectedHole < 18) {
+      clearTimeout(autoAdvanceTimer);
+      autoAdvanceTimer = setTimeout(() => {
+        if (selectedHole === holeIndex + 1 && groupPlayers().length && groupPlayers().every((item) => item.scores[holeIndex] !== "")) moveToHole(selectedHole + 1, { skipMissingCheck: true });
+      }, 700);
+    }
+  }
+
+  function renderGroupScoring() {
+    renderGroupSelectors();
+    const players = groupPlayers();
+    renderHoleBanner(players);
+    $("#roundLockedNotice").hidden = !isLocked();
+    const list = $("#groupScoreList");
+    const holeComplete = players.length > 0 && players.every((player) => player.scores[selectedHole - 1] !== "");
+    const enteredScores = players.filter((player) => player.scores[selectedHole - 1] !== "").length;
+    $("#mobileScoringStatus").textContent = `Group ${selectedGroup} · Hole ${selectedHole} · ${enteredScores}/${players.length} scores`;
+    const missingReminder = priorMissingScoreReminder(players);
+    const reminderVisible = Boolean(missingReminder && canScore());
+    const reminder = $("#priorMissingScoresNotice");
+    reminder.hidden = !reminderVisible;
+    reminder.textContent = reminderVisible ? missingReminder : "";
+    const mobileReminder = $("#mobileMissingScoresReminder");
+    mobileReminder.hidden = !reminderVisible;
+    mobileReminder.textContent = reminderVisible ? `⚠ ${missingReminder}` : "";
+    [$("#advanceHoleBtn"), $("#advanceHoleBtnBottom")].forEach((advanceButton) => {
+      advanceButton.hidden = !holeComplete || selectedHole >= 18;
+      advanceButton.textContent = selectedHole < 18 ? `Continue to Hole ${selectedHole + 1}` : "Round complete";
+    });
+    list.innerHTML = players.map((player) => {
+      const index = selectedHole - 1;
+      const hole = E.holesForPlayer(E.COURSE, player)[index];
+      const gross = player.scores[index];
+      const competitive = E.isInGame(player);
+      const strokes = E.strokesForPlayerHole(player, state.players, E.COURSE, state.settings, index);
+      const skinPops = E.skinStrokesForPlayerHole(player, state.players, E.COURSE, state.settings, index);
+      const net = E.netScore(gross, strokes);
+      const achievement = competitive ? (E.isEagle(gross, hole.par) ? "Eagle" : E.isBirdie(gross, hole.par) ? "Birdie" : Number(gross) > 0 && Number(gross) <= hole.par - 3 ? "Albatross" : "") : "";
+      const canMarkSandy = competitive && E.sandyAllowedForHole(E.COURSE, index) && Number(gross) >= 1 && Number(gross) <= hole.par;
+      const isKpHole = competitive && KP_HOLES.includes(selectedHole);
+      const hasKp = (state.settings.kpClaims[String(selectedHole)] || []).includes(player.id);
+      const kpClaimState = E.kpClaimStatus(player, E.COURSE, state.settings, index, state.players);
+      const kpNote = kpClaimState === "marked"
+        ? '<span class="prior-kp-note kp-marked-note" title="KP Marked · 0 tics">KPM</span>'
+        : kpClaimState === "pending" ? '<span class="prior-kp-note" title="KP Pending · 0 tics">KP Pending</span>' : "";
+      const hasSkin = E.skinResult(state.players, E.COURSE, state.settings, index).winnerId === player.id;
+      const disabled = canScore() ? "" : "disabled";
+      const sandyDisabled = disabled || (isKpHole && hasKp) ? "disabled" : "";
+      const kpDisabled = disabled || player.sandies[index] ? "disabled" : "";
+      const syncState = scoreSyncStatus.get(scoreSyncKey(player.id, index));
+      const scoreEntered = gross !== "" && gross !== null && gross !== undefined;
+      const scoreVisualState = syncState === "error" ? "error" : syncState === "saving" || syncState === "pending" ? "pending" : scoreEntered ? "saved" : "missing";
+      const touch = touchFeedback.get(player.id);
+      const feedbackKind = touch?.kind || (syncState === "synced" ? "success" : syncState === "error" ? "error" : syncState === "saving" || syncState === "pending" ? "pending" : "");
+      const scorekeeperId = state.settings.scorekeepers[selectedGroup] || "";
+      const signedInPlayer = currentRoundPlayer();
+      const canChangeScorekeeper = adminUnlocked || (signedInPlayer?.group === selectedGroup && (!scorekeeperId || scorekeeperId === signedInPlayer.id));
+      const achievementClass = achievement ? `achievement-tic achievement-tic--${achievement.toLowerCase()}` : "";
+      return `<article class="group-score-card score-${scoreVisualState} ${competitive ? "" : "is-score-only"} ${feedbackKind ? `touch-feedback--${feedbackKind}` : ""}" data-player-id="${player.id}">
+        <header class="score-card-header"><div class="score-player"><div class="score-player-heading"><label class="scorekeeper-toggle" title="Group scorekeeper"><input data-kind="scorekeeper" type="checkbox" ${scorekeeperId === player.id ? "checked" : ""} ${canChangeScorekeeper ? "" : "disabled"}>SK</label><strong>${playerNameHtml(player, state.players.indexOf(player))}</strong></div><span>${esc(teeOf(player).name)} · Hcp ${displayPlayingHandicap(hcp(player))} · ${skinPops > 0 ? `gets ${skinPops === 0.5 ? "1/2" : skinPops}` : skinPops < 0 ? `gives ${Math.abs(skinPops) === 0.5 ? "1/2" : Math.abs(skinPops)}` : "no stroke"}</span>${competitive ? "" : '<span class="score-only-note">Not in the game · score only</span>'}</div><div class="score-card-auto-tics">${achievement ? `<span class="auto-tic ${achievementClass}">${achievement} ✓</span>` : ""}${hasSkin ? '<span class="auto-tic skin-tic">Skin ✓</span>' : ""}${kpNote}</div></header>
+        <div class="score-card-controls"><div class="score-entry-wrap"><div class="score-stepper"><button type="button" data-delta="-1" ${disabled} aria-label="Decrease score">−</button><input type="number" min="1" max="20" inputmode="numeric" value="${gross}" ${disabled} aria-label="${esc(nameOf(player, 0))}'s gross score"><button type="button" data-delta="1" ${disabled} aria-label="Increase score">+</button></div></div>${canMarkSandy ? `<label class="tic-toggle compact-tic-toggle sandy-toggle" title="${hasKp ? "Remove KP before marking a Sandy" : "Mark Sandy"}"><input data-kind="sandy" type="checkbox" ${player.sandies[index] ? "checked" : ""} ${sandyDisabled}>SD</label>` : ""}${isKpHole ? `<label class="tic-toggle compact-tic-toggle kp-toggle" title="${player.sandies[index] ? "Remove Sandy before marking KP" : "Mark KP"}"><input data-kind="kp" type="checkbox" ${hasKp ? "checked" : ""} ${kpDisabled}>KP</label>` : ""}<div class="net-box"><span>Match net</span><strong>${net ?? "—"}</strong></div></div>
+        ${touch ? `<span class="touch-confirmation touch-confirmation--${touch.kind}" role="status">${touch.kind === "success" ? "✓" : touch.kind === "warning" ? "!" : "×"} ${esc(touch.message)}</span>` : ""}
+      </article>`;
+    }).join("");
+    list.querySelectorAll(".group-score-card").forEach((card) => {
+      const player = state.players.find((item) => item.id === card.dataset.playerId);
+      const input = card.querySelector('input[type="number"]');
+      input?.addEventListener("change", (event) => setScore(player.id, event.target.value));
+      card.querySelectorAll("[data-delta]").forEach((button) => button.addEventListener("click", () => setScore(player.id, E.steppedScore(player.scores[selectedHole - 1], E.COURSE.holes[selectedHole - 1].par, Number(button.dataset.delta)))));
+      card.querySelector('[data-kind="sandy"]')?.addEventListener("change", (event) => dispatchWithTouchFeedback({ type: "SET_SANDY", payload: { playerId: player.id, holeIndex: selectedHole - 1, value: event.target.checked } }, player.id, event.target.checked ? "Sandy marked" : "Sandy removed"));
+      card.querySelector('[data-kind="kp"]')?.addEventListener("change", (event) => dispatchWithTouchFeedback({ type: "SET_KP", payload: { hole: selectedHole, playerId: player.id, value: event.target.checked } }, player.id, event.target.checked ? "KP marked" : "KP removed"));
+      card.querySelector('[data-kind="scorekeeper"]')?.addEventListener("change", (event) => dispatchWithTouchFeedback({ type: "SET_SCOREKEEPER", payload: { group: selectedGroup, playerId: event.target.checked ? player.id : "" } }, player.id, event.target.checked ? "Scorekeeper assigned" : "Scorekeeper cleared"));
+    });
+    $("#noGroupPlayers").hidden = players.length > 0;
+    list.hidden = players.length === 0;
+    renderGroupScorecard(players);
+    updateScorecardVisibility();
+    renderRoundIdentity();
+    requestAnimationFrame(updateScrollAffordances);
+  }
+
+  function priorMissingScoreReminder(players) {
+    if (selectedHole <= 1) return "";
+    const entries = players.map((player) => {
+      const holes = player.scores.slice(0, selectedHole - 1).flatMap((score, index) => score === "" || score === null || score === undefined ? [index + 1] : []);
+      if (!holes.length) return null;
+      const holeText = holes.length === 1 ? `Hole ${holes[0]}` : `Holes ${holes.slice(0, -1).join(", ")} and ${holes.at(-1)}`;
+      return `${nameOf(player, state.players.indexOf(player))} — ${holeText}`;
+    }).filter(Boolean);
+    return entries.length ? `Missing earlier scores: ${entries.join("; ")}.` : "";
+  }
+
+  function updateScorecardVisibility() {
+    $("#groupScorecardPanel").hidden = !scorecardOpen;
+    $(".scorecard-toggle-row").hidden = scorecardOpen;
+    $("#toggleScorecardBtn").setAttribute("aria-expanded", String(scorecardOpen));
+    $("#toggleScorecardBtn").textContent = "Show group scorecard";
+  }
+
+  function strokesReceivedFor(player, holeIndex, round) {
+    return Math.max(0, E.strokesForPlayerHole(player, round.players, E.COURSE, round.settings, holeIndex));
+  }
+
+  function strokesReceived(player, holeIndex) { return strokesReceivedFor(player, holeIndex, state); }
+
+  function handicapDots(player, holeIndex) {
+    const strokes = strokesReceived(player, holeIndex);
+    if (!strokes) return "";
+    return `<span class="handicap-dots" aria-label="${strokes} game-relative match stroke${strokes === 1 ? "" : "s"} received"><span aria-hidden="true">${"●".repeat(strokes)}</span></span>`;
+  }
+
+  function scoreMarkClasses(score, holeIndex) {
+    const mark = E.scoreMark(score, E.COURSE.holes[holeIndex].par);
+    return mark && mark !== "par" ? ` score-mark score-mark--${mark}` : "";
+  }
+
+  function kpScorecardMark(player, holeIndex, round = state) {
+    const status = E.kpClaimStatus(player, E.COURSE, round.settings, holeIndex, round.players);
+    if (status === "none") return "";
+    if (status === "marked") return '<span class="kp-scorecard-mark is-marked" aria-label="KP Marked; 0 tics" title="KP Marked; 0 tics">KPM</span>';
+    const label = status === "kp" ? "KP; qualifying holder; 1 tic" : "KP Pending; 0 tics";
+    return `<span class="kp-scorecard-mark ${status === "kp" ? "is-kp" : "is-pending"}" aria-label="${label}" title="${label}">KP</span>`;
+  }
+
+  function skinScorecardMark(player, holeIndex, round = state) {
+    if (E.skinResult(round.players, E.COURSE, round.settings, holeIndex).winnerId !== player.id) return "";
+    return '<span class="skin-scorecard-mark" aria-label="Skin winner" title="Skin winner">S</span>';
+  }
+
+  function scorecardIndicators(player, holeIndex, round = state) {
+    const indicators = `${skinScorecardMark(player, holeIndex, round)}${kpScorecardMark(player, holeIndex, round)}`;
+    return indicators ? `<span class="scorecard-indicators">${indicators}</span>` : "";
+  }
+
+  function scorecardSegment(player, totals, start, end) {
+    const entered = player.scores.slice(start, end).filter((score) => Number.isFinite(Number(score)) && Number(score) >= 1).length;
+    return { text: entered ? `${totals.gross}/${totals.net}` : "—", complete: entered === end - start };
+  }
+
+  function renderGroupScorecard(players) {
+    const frontHead = E.COURSE.holes.slice(0, 9).map((hole) => `<th>${hole.number}</th>`).join("");
+    const backHead = E.COURSE.holes.slice(9).map((hole) => `<th>${hole.number}</th>`).join("");
+    $("#groupScorecardHead").innerHTML = `<tr><th>Player</th>${frontHead}<th class="scorecard-segment-heading">Out<small>Gross/Net</small></th>${backHead}<th class="scorecard-segment-heading">In<small>Gross/Net</small></th><th class="scorecard-segment-heading">Total<small>Gross/Net</small></th></tr>`;
+    $("#groupScorecardBody").innerHTML = players.map((player) => {
+      const totals = E.playerTotals(player, E.COURSE, state.settings, state.players);
+      const front = scorecardSegment(player, totals.front, 0, 9);
+      const back = scorecardSegment(player, totals.back, 9, 18);
+      const total = scorecardSegment(player, totals.total, 0, 18);
+      const cells = player.scores.map((score, index) => `<td><button type="button" class="score-cell ${index + 1 === selectedHole ? "active-hole" : ""}" data-card-hole="${index + 1}"><span class="score-cell-value${scoreMarkClasses(score, index)}">${score || "—"}</span>${handicapDots(player, index)}${scorecardIndicators(player, index)}</button></td>`);
+      const totalCell = (segment) => `<td class="scorecard-segment-total ${segment.complete ? "" : "is-incomplete"}">${segment.text}</td>`;
+      return `<tr class="${E.isInGame(player) ? "" : "score-only-row"}"><td>${playerNameHtml(player, state.players.indexOf(player))}${E.isInGame(player) ? "" : '<small>Not in game · score only</small>'}</td>${cells.slice(0, 9).join("")}${totalCell(front)}${cells.slice(9).join("")}${totalCell(back)}${totalCell(total)}</tr>`;
+    }).join("");
+    document.querySelectorAll("[data-card-hole]").forEach((button) => button.addEventListener("click", () => { selectedHole = Number(button.dataset.cardHole); renderGroupScoring(); }));
+  }
+
+  function commentTimestamp(value) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "";
+    return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(date);
+  }
+
+  function mayDeleteComment(comment) {
+    return Boolean(currentUser && (currentUser.role === "admin" || (comment.authorAccountId === currentUser.id && comment.authorRole === currentUser.role)));
+  }
+
+  function gmailComposeTargets(email, subject, body) {
+    const appParams = new URLSearchParams({ to: email, subject, body });
+    const webParams = new URLSearchParams({ view: "cm", fs: "1", to: email, su: subject, body });
+    const web = `https://mail.google.com/mail/?${webParams.toString()}`;
+    const agent = navigator.userAgent || "";
+    if (/iPad|iPhone|iPod/.test(agent)) return { native: `googlegmail:///co?${appParams.toString()}`, web, platform: "ios" };
+    if (/Android/i.test(agent)) {
+      const fallback = encodeURIComponent(web);
+      return { native: `intent://co?${appParams.toString()}#Intent;scheme=googlegmail;package=com.google.android.gm;S.browser_fallback_url=${fallback};end`, web, platform: "android" };
+    }
+    return { native: web, web, platform: "web" };
+  }
+
+  function openGmailCompose(event, targets) {
+    if (targets.platform === "web") return;
+    event.preventDefault();
+    if (targets.platform === "android") {
+      window.location.href = targets.native;
+      return;
+    }
+    let appOpened = false;
+    const markAppOpened = () => {
+      if (document.hidden) appOpened = true;
+    };
+    document.addEventListener("visibilitychange", markAppOpened, { once: true });
+    window.location.href = targets.native;
+    window.setTimeout(() => {
+      document.removeEventListener("visibilitychange", markAppOpened);
+      if (!appOpened && !document.hidden) window.location.href = targets.web;
+    }, 1200);
+  }
+
+  function renderHoleComments() {
+    const holeSelector = $("#commentHoleSelect");
+    if (!holeSelector.options.length) holeSelector.innerHTML = E.COURSE.holes.map((hole) => `<option value="${hole.number}">Hole ${hole.number}</option>`).join("");
+    holeSelector.value = String(selectedCommentHole);
+    const comments = (state.holeComments || []).filter((comment) => comment.hole === selectedCommentHole).sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+    $("#holeCommentsTitle").textContent = `Hole ${selectedCommentHole} comments`;
+    $("#holeCommentCount").textContent = `${comments.length} comment${comments.length === 1 ? "" : "s"}`;
+    $("#holeCommentList").innerHTML = comments.length ? comments.map((comment) => {
+      const identity = comment.authorGroup ? `Group ${comment.authorGroup}` : comment.authorRole === "admin" ? "Admin" : "Player";
+      const timestamp = commentTimestamp(comment.createdAt);
+      return `<article class="hole-comment"><div class="hole-comment-meta"><div><strong>${esc(comment.authorName)}</strong><span>${esc(identity)}${timestamp ? ` · ${esc(timestamp)}` : ""}</span></div>${mayDeleteComment(comment) ? `<button class="text-button delete-hole-comment" type="button" data-comment-id="${esc(comment.id)}" aria-label="Remove ${esc(comment.authorName)}'s comment">Remove</button>` : ""}</div><p>${esc(comment.text)}</p></article>`;
+    }).join("") : `<div class="hole-comment-empty">No comments have been posted for Hole ${selectedCommentHole}.</div>`;
+    const form = $("#holeCommentForm");
+    const input = $("#holeCommentInput");
+    const postButton = $("#postHoleCommentBtn");
+    const canPost = Boolean(currentUser && !isLocked() && connectionMode === "live" && !spectatorMode);
+    form.hidden = !currentUser;
+    input.disabled = !canPost;
+    postButton.disabled = !canPost;
+    input.placeholder = `Share a note about Hole ${selectedCommentHole}`;
+    const access = $("#holeCommentAccess");
+    access.hidden = canPost;
+    access.textContent = !currentUser ? "Sign in to leave a comment." : isLocked() ? "This round is locked; comments are view only." : connectionMode !== "live" ? "Reconnect to post a shared comment." : "";
+    const photoEmail = String(state.settings.photoEmail || "").trim();
+    const photoAction = $("#holePhotoEmailAction");
+    const photoLink = $("#emailHolePhotoLink");
+    const gmailLink = $("#gmailHolePhotoLink");
+    photoAction.hidden = !photoEmail;
+    if (photoEmail) {
+      const subject = `${state.roundName} · Hole ${selectedCommentHole} photo`;
+      const body = `Round: ${state.roundName}\nDate: ${state.date}\nHole: ${selectedCommentHole}\nSent from: DH Game Comments\n\nPlease attach the photo before sending.`;
+      photoLink.href = `mailto:${photoEmail}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+      photoLink.textContent = `Email a photo for Hole ${selectedCommentHole}`;
+      const gmailTargets = gmailComposeTargets(photoEmail, subject, body);
+      gmailLink.href = gmailTargets.native;
+      gmailLink.target = gmailTargets.platform === "web" ? "_blank" : "_self";
+      gmailLink.onclick = (event) => openGmailCompose(event, gmailTargets);
+    }
+    document.querySelectorAll(".delete-hole-comment").forEach((button) => button.addEventListener("click", () => deleteHoleComment(button.dataset.commentId)));
+  }
+
+  async function savePhotoEmail(event) {
+    event.preventDefault();
+    const input = $("#photoEmailInput");
+    const email = input.value.trim().toLowerCase();
+    if (email && !input.checkValidity()) return input.reportValidity();
+    if (!await dispatch({ type: "SET_PHOTO_EMAIL", payload: { email } })) return;
+    await refreshState().catch(() => {});
+    showToast(email ? "Photo email address saved." : "Photo email address cleared.", "success");
+  }
+
+  async function postHoleComment(event) {
+    event.preventDefault();
+    const input = $("#holeCommentInput");
+    const text = input.value.trim();
+    if (!currentUser) { openAdminDialog(); return showToast("Sign in to leave a comment.", "error"); }
+    if (!text) return showToast("Enter a comment before posting.", "error");
+    const posted = await dispatch({ type: "ADD_HOLE_COMMENT", payload: { hole: selectedCommentHole, text } });
+    if (!posted) return;
+    input.value = "";
+    await refreshState().catch(() => {});
+    render();
+    showToast(`Comment posted for Hole ${selectedCommentHole}.`, "success");
+  }
+
+  async function deleteHoleComment(commentId) {
+    const comment = (state.holeComments || []).find((item) => item.id === commentId);
+    if (!comment || !mayDeleteComment(comment)) return;
+    if (!window.confirm("Remove this hole comment?")) return;
+    const removed = await dispatch({ type: "DELETE_HOLE_COMMENT", payload: { commentId } });
+    if (!removed) return;
+    await refreshState().catch(() => {});
+    render();
+    showToast("Comment removed.", "success");
+  }
+
+  function renderKPs(round = leaderboardRound()) {
+    const canAdminEdit = !leaderboardIsSaved() && adminUnlocked && !isLocked();
+    $("#kpPanel").innerHTML = KP_HOLES.map((hole) => {
+      const winnerId = round.settings.kpWinners[String(hole)];
+      const markedNames = (round.settings.kpClaims[String(hole)] || []).map((playerId) => round.players.find((item) => item.id === playerId)).filter((player) => player && E.isInGame(player) && E.kpClaimStatus(player, E.COURSE, round.settings, hole - 1, round.players) === "marked").map((player) => esc(nameOf(player, round.players.indexOf(player))));
+      return `<div class="kp-card"><label>Hole ${hole} latest KP claim<select data-kp-hole="${hole}" ${canAdminEdit ? "" : "disabled"}><option value="">No claim</option>${E.gamePlayers(round.players).map((item) => `<option value="${item.id}" ${winnerId === item.id ? "selected" : ""}>${esc(nameOf(item, round.players.indexOf(item)))}${item.isGuest ? " *G" : ""} · ${item.group}</option>`).join("")}</select></label><span class="kp-card-status">KPM: ${markedNames.length ? markedNames.join(" / ") : "None"}</span></div>`;
+    }).join("");
+    document.querySelectorAll("[data-kp-hole]").forEach((select) => select.addEventListener("change", (event) => dispatch({ type: "SET_KP", payload: { hole: Number(event.target.dataset.kpHole), playerId: event.target.value } }, { admin: true })));
+  }
+
+  function standingCompare(a, b) {
+    const aThru = a.sortValues.thru;
+    const bThru = b.sortValues.thru;
+    if (a.totals.total.completed !== b.totals.total.completed) return a.totals.total.completed ? -1 : 1;
+    if (a.totals.total.completed) return a.totals.total.net - b.totals.total.net || a.sortValues.player.localeCompare(b.sortValues.player);
+    return bThru - aThru || a.totals.total.net - b.totals.total.net || a.sortValues.player.localeCompare(b.sortValues.player);
+  }
+
+  function leaderboardThruValue(player, totals) {
+    return L.thruValue(player, totals.total.completed);
+  }
+
+  function leaderboardThruText(player, totals) {
+    return L.thruText(player, totals.total.completed);
+  }
+
+  function settledPointText(value, complete, includePlus = true) {
+    const points = Number(value) || 0;
+    return `${includePlus && points > 0 ? "+" : ""}${points.toFixed(complete ? 0 : 1)}`;
+  }
+
+  function bccTipsRow(settlement, columnCount) {
+    if (!settlement.complete) return "";
+    const leadingColumns = Math.max(1, columnCount - 10);
+    return `<tr class="bcc-tips-row"><td class="settlement-spacer" colspan="${leadingColumns}"></td><td class="settlement-label" colspan="3">Total to Collect</td><td class="points-negative settlement-value">${settlement.totalToCollect.toFixed(0)}</td><td class="settlement-label" colspan="3">BCCC Tips</td><td class="points-net is-positive settlement-value">${settlement.tips > 0 ? "+" : ""}${settlement.tips.toFixed(0)}</td><td class="settlement-spacer settlement-trailing-spacer" colspan="2"></td></tr>`;
+  }
+
+  function leaderboardItems(round = leaderboardRound()) {
+    const settlement = E.pointsSettlement(round.players, E.COURSE, round.settings);
+    const ledgerByPlayer = new Map(settlement.entries.map((entry) => [entry.playerId, entry]));
+    return E.gamePlayers(round.players).map((player) => {
+      const index = round.players.indexOf(player);
+      const totals = E.playerTotals(player, E.COURSE, round.settings, round.players);
+      const ghinAdjusted = E.ghinAdjustedTotal(player, E.COURSE, round.settings);
+      const tics = E.ticSummary(player, round.players, E.COURSE, round.settings);
+      const ledger = ledgerByPlayer.get(player.id);
+      return {
+        player,
+        index,
+        totals,
+        ghinAdjusted,
+        tics,
+        ledger,
+        sortValues: {
+          player: nameOf(player, index),
+          group: player.group,
+          thru: leaderboardThruValue(player, totals),
+          handicap: hcpForRound(player, round),
+          gross: totals.total.completed ? totals.total.gross : null,
+          ghinAdjusted: ghinAdjusted.completed ? ghinAdjusted.gross : null,
+          net: totals.total.completed ? totals.total.net : null,
+          birdies: tics.birdies,
+          eagles: tics.eagles,
+          skins: tics.skins,
+          frontWeight: tics.frontWeight,
+          backWeight: tics.backWeight,
+          totalNetWeight: tics.totalNetWeight,
+          sandies: tics.sandies,
+          kps: tics.kps,
+          positive: ledger.positive,
+          negative: ledger.negative,
+          netPoints: ledger.settledNet
+        }
+      };
+    });
+  }
+
+  function rankedPlayers(round = leaderboardRound()) {
+    const items = leaderboardItems(round);
+    if (leaderboardSort.key === "standing") return items.sort(standingCompare);
+    return L.sortItems(items, leaderboardSort.key, leaderboardSort.direction, standingCompare);
+  }
+
+  function leaderboardLegendMarkup() {
+    return LEADERBOARD_COLUMNS.map((column) => `<div><dt>${esc(column.label)}</dt><dd>${esc(column.description)}</dd></div>`).join("");
+  }
+
+  function renderLeaderboardHeaders() {
+    $("#leaderboardHead").innerHTML = `<tr>${LEADERBOARD_COLUMNS.map((column) => {
+      const active = leaderboardSort.key === column.key;
+      const ariaSort = active ? ` aria-sort="${leaderboardSort.direction === "asc" ? "ascending" : "descending"}"` : "";
+      const icon = active ? (leaderboardSort.direction === "asc" ? "▲" : "▼") : "↕";
+      return `<th class="${column.key === "kps" ? "kp-count-column" : ""}"${ariaSort}><button class="leaderboard-sort-button" type="button" data-leaderboard-sort="${column.key}" title="${esc(`${column.label}: ${column.description} Sort this column.`)}">${esc(column.label)}<span class="sort-icon" aria-hidden="true">${icon}</span></button></th>`;
+    }).join("")}</tr>`;
+    $("#leaderboardLegendList").innerHTML = leaderboardLegendMarkup();
+    document.querySelectorAll("[data-leaderboard-sort]").forEach((button) => button.addEventListener("click", () => {
+      const column = LEADERBOARD_COLUMNS.find((item) => item.key === button.dataset.leaderboardSort);
+      leaderboardSort = leaderboardSort.key === column.key
+        ? { key: column.key, direction: leaderboardSort.direction === "asc" ? "desc" : "asc" }
+        : { key: column.key, direction: column.firstDirection };
+      renderLeaderboard();
+    }));
+    const activeColumn = LEADERBOARD_COLUMNS.find((column) => column.key === leaderboardSort.key);
+    $("#resetLeaderboardSortBtn").hidden = !activeColumn;
+    $("#leaderboardSortStatus").textContent = activeColumn
+      ? `Sorted by ${activeColumn.label}, ${activeColumn.text ? (leaderboardSort.direction === "asc" ? "A to Z" : "Z to A") : (leaderboardSort.direction === "asc" ? "lowest to highest" : "highest to lowest")}.`
+      : `${leaderboardIsSaved() ? "Saved" : "Live"} standings order. Select a column heading to sort.`;
+  }
+
+  function renderLeaderboard() {
+    const round = leaderboardRound();
+    const saved = leaderboardIsSaved();
+    renderLeaderboardHeaders();
+    if (leaderboardLoading) {
+      $("#leaderboardKicker").textContent = "Loading standings";
+      $("#leaderboardRoundStatus").classList.remove("is-saved");
+      $("#leaderboardRoundStatus").textContent = "Loading the active or most recent leaderboard…";
+      $("#kpPanel").innerHTML = Array.from({ length: 4 }, () => '<div class="kp-card skeleton-kp-card" aria-hidden="true"><span class="skeleton-block"></span><span class="skeleton-block skeleton-short"></span></div>').join("");
+      $("#leaderboardBody").innerHTML = Array.from({ length: 5 }, () => `<tr class="skeleton-table-row" aria-hidden="true">${Array.from({ length: LEADERBOARD_COLUMNS.length }, () => '<td><span class="skeleton-block"></span></td>').join("")}</tr>`).join("");
+      $("#leaderboardEmpty").hidden = true;
+      $(".leaderboard-wrap").hidden = false;
+      renderRoundIdentity();
+      requestAnimationFrame(updateScrollAffordances);
+      return;
+    }
+    const settlement = E.pointsSettlement(round.players, E.COURSE, round.settings);
+    renderKPs(round);
+    const players = rankedPlayers(round);
+    const signedInPlayer = saved ? null : currentRoundPlayer();
+    const { leaderId: pointLeaderId, loserId: pointLoserId } = L.pointMarkerIds(players);
+    $("#leaderboardKicker").textContent = saved ? "Most recent saved round" : "Updates live";
+    $("#leaderboardRoundStatus").classList.toggle("is-saved", saved);
+    $("#leaderboardRoundStatus").textContent = saved
+      ? `${round.roundName} · ${round.date} · Saved ${publicLeaderboard?.savedAt ? new Date(publicLeaderboard.savedAt).toLocaleString() : "previously"} · Read-only results`
+      : round.players.length ? `${round.roundName} · ${round.date} · Live results update automatically` : "No active or saved round is available yet.";
+    $("#leaderboardBody").innerHTML = players.map((item) => {
+      const tics = item.tics;
+      const ledger = item.ledger;
+      const netClass = ledger.settledNet > 0 ? "is-positive" : ledger.settledNet < 0 ? "is-negative" : "";
+      const netText = settledPointText(ledger.settledNet, settlement.complete);
+      const rowClasses = [
+        item.player.id === pointLeaderId ? "leader-row-leading" : "",
+        item.player.id === pointLoserId ? "leader-row-trailing" : "",
+        signedInPlayer?.id === item.player.id ? "leader-row-current" : ""
+      ].filter(Boolean).join(" ");
+      const marker = item.player.id === pointLeaderId
+        ? '<span class="standing-marker standing-marker--leader" role="img" aria-label="Point leader"></span>'
+        : item.player.id === pointLoserId ? '<span class="standing-marker standing-marker--trailing" role="img" aria-label="Lowest point total">💩</span>' : "";
+      const thruClass = item.totals.total.completed ? "is-finished" : "is-incomplete";
+      return `<tr class="${rowClasses}"><td><span class="leaderboard-player-cell">${marker}<span>${playerNameHtml(item.player, item.index)}</span></span></td><td>${displayPlayingHandicap(hcpForRound(item.player, round))}</td><td><span class="group-pill">${item.player.group}</span></td><td class="thru-cell ${thruClass}">${leaderboardThruText(item.player, item.totals)}</td><td>${complete(item.totals.total.gross, item.totals.total.completed)}</td><td>${complete(item.ghinAdjusted.gross, item.ghinAdjusted.completed)}</td><td>${complete(item.totals.total.net, item.totals.total.completed)}</td><td>${tics.eagles}</td><td>${tics.birdies}</td><td>${tics.sandies}</td><td class="kp-count-column" title="KPs won">${tics.kps}</td><td>${tics.skins}</td><td>${tics.frontWeight}</td><td>${tics.backWeight}</td><td>${tics.totalNetWeight}</td><td class="points-positive">${ledger.positive ? `+${ledger.positive.toFixed(1)}` : "0.0"}</td><td class="points-negative">${ledger.negative.toFixed(1)}</td><td class="points-net ${netClass}">${netText}</td></tr>`;
+    }).join("") + bccTipsRow(settlement, LEADERBOARD_COLUMNS.length);
+    $("#leaderboardEmpty").hidden = players.length > 0;
+    $(".leaderboard-wrap").hidden = players.length === 0;
+    renderRoundIdentity();
+    requestAnimationFrame(updateScrollAffordances);
+  }
+
+  function groupScoringUrl(group) {
+    const url = new URL(location.href);
+    url.search = "";
+    url.searchParams.set("group", group);
+    url.searchParams.set("view", "score");
+    url.searchParams.set("scorer", "1");
+    url.searchParams.set("round", state.roundId);
+    if (shareTokens[group]) url.searchParams.set("token", shareTokens[group]);
+    return url.href;
+  }
+
+  function spectatorUrl() {
+    const url = new URL(location.href);
+    url.search = "";
+    url.searchParams.set("view", "leaderboard");
+    url.searchParams.set("spectator", "1");
+    return url.href;
+  }
+
+  async function copyText(value) {
+    try { await navigator.clipboard.writeText(value); }
+    catch (_) {
+      const input = document.createElement("textarea");
+      input.value = value; document.body.append(input); input.select(); document.execCommand("copy"); input.remove();
+    }
+  }
+
+  function openQr(title, url) {
+    $("#qrTitle").textContent = title;
+    $("#qrImage").src = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&format=png&data=${encodeURIComponent(url)}`;
+    $("#qrLinkText").textContent = url;
+    $("#qrDialog").showModal();
+  }
+
+  function renderSpectatorSharing() {
+    const url = spectatorUrl();
+    $("#spectatorShareCard").innerHTML = `<article class="group-share-card"><div><strong>Live leaderboard</strong><span>View-only access · updates automatically</span></div><div class="share-actions"><button class="button button-quiet" type="button" data-viewer-share="copy">Copy link</button><button class="button button-quiet" type="button" data-viewer-share="share">Share</button><button class="button button-primary" type="button" data-viewer-share="qr">QR code</button></div></article>`;
+    document.querySelectorAll("[data-viewer-share]").forEach((button) => button.addEventListener("click", async () => {
+      if (button.dataset.viewerShare === "copy") { await copyText(url); showToast("Read-only leaderboard link copied.", "success"); }
+      if (button.dataset.viewerShare === "share") {
+        if (navigator.share) await navigator.share({ title: "Berry Creek live leaderboard", text: "Follow the Berry Creek DH Game live leaderboard", url }).catch(() => {});
+        else { await copyText(url); showToast("Read-only leaderboard link copied.", "success"); }
+      }
+      if (button.dataset.viewerShare === "qr") openQr("Read-only leaderboard", url);
+    }));
+  }
+
+  function renderGroupSharing(errorMessage = "") {
+    if (!adminUnlocked) {
+      $("#groupShareGrid").innerHTML = '<div class="empty-state">Unlock admin controls to create protected group scoring links.</div>';
+      return;
+    }
+    if (errorMessage || !R.GROUPS.every((group) => shareTokens[group])) {
+      $("#groupShareGrid").innerHTML = `<div class="empty-state">${esc(errorMessage || "Protected scoring links are loading…")}</div>`;
+      return;
+    }
+    $("#groupShareGrid").innerHTML = R.GROUPS.map((group) => `<article class="group-share-card"><div><strong>Group ${group}</strong><span>${groupPlayers(group).length}/5 players</span></div><div class="share-actions"><button class="button button-quiet" data-share-action="copy" data-group="${group}">Copy link</button><button class="button button-quiet" data-share-action="share" data-group="${group}">Share</button><button class="button button-primary" data-share-action="qr" data-group="${group}">QR code</button></div></article>`).join("");
+    document.querySelectorAll("[data-share-action]").forEach((button) => button.addEventListener("click", async () => {
+      const group = button.dataset.group;
+      const url = groupScoringUrl(group);
+      if (button.dataset.shareAction === "copy") { await copyText(url); showToast(`Group ${group} link copied.`, "success"); }
+      if (button.dataset.shareAction === "share") {
+        if (navigator.share) await navigator.share({ title: `Berry Creek Group ${group} scoring`, text: `Open the Group ${group} scorecard`, url }).catch(() => {});
+        else { await copyText(url); showToast(`Group ${group} link copied.`, "success"); }
+      }
+      if (button.dataset.shareAction === "qr") {
+        openQr(`Group ${group} scoring link`, url);
+      }
+    }));
+  }
+
+  function renderSavedRounds(errorMessage = "") {
+    const status = $("#savedRoundsStatus");
+    const list = $("#savedRoundsList");
+    if (!status || !list) return;
+    if (!adminUnlocked) {
+      status.textContent = "Sign in as an admin to save or view historical rounds.";
+      list.replaceChildren();
+      return;
+    }
+    if (connectionMode !== "live") {
+      status.textContent = "Saved rounds require a live connection.";
+      list.replaceChildren();
+      return;
+    }
+    if (errorMessage) {
+      status.textContent = errorMessage;
+      list.innerHTML = '<div class="empty-state">Saved rounds could not be loaded.</div>';
+      return;
+    }
+    status.textContent = `${savedRounds.length} saved round${savedRounds.length === 1 ? "" : "s"}`;
+    list.innerHTML = savedRounds.length ? savedRounds.map((round) => {
+      const savedAt = Number.isNaN(Date.parse(round.savedAt)) ? round.savedAt : new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(round.savedAt));
+      return `<article class="saved-round-card"><div><strong>${esc(round.roundName)}</strong><span>${esc(round.date)} · ${round.playerCount} player${round.playerCount === 1 ? "" : "s"} · ${round.completed ? "Complete" : "In progress when saved"}</span><span>Saved ${esc(savedAt)} · ${Number(round.changeCount) || 0} recorded change${Number(round.changeCount) === 1 ? "" : "s"}</span></div><div class="saved-round-actions"><button class="button button-primary" type="button" data-round-action="view" data-round-id="${round.id}">View results</button><button class="button button-quiet" type="button" data-round-action="print" data-round-id="${round.id}">Print results</button><button class="button button-quiet" type="button" data-round-action="roster" data-round-id="${round.id}">Reuse roster</button><button class="button button-quiet" type="button" data-round-action="download" data-round-id="${round.id}">Download</button><button class="button button-quiet" type="button" data-round-action="delete" data-round-id="${round.id}">Delete</button></div></article>`;
+    }).join("") : '<div class="empty-state">No rounds have been saved yet.</div>';
+    document.querySelectorAll("[data-round-action]").forEach((button) => button.addEventListener("click", () => handleSavedRoundAction(button.dataset.roundAction, button.dataset.roundId)));
+  }
+
+  async function saveCurrentRound() {
+    if (!state.players.length) return showToast("Add at least one player before saving the round.", "error");
+    if (!roundHasCompleteScores()) {
+      showToast("Complete every player's 18-hole scorecard before saving the round.", "error");
+      return null;
+    }
+    if (currentRoundIsLockedAndSaved()) {
+      showToast("This locked round is already saved in round history.");
+      return savedRounds.find((round) => round.roundId === state.roundId) || null;
+    }
+    try {
+      const body = await databaseRequest("/api/rounds", { method: "POST", body: JSON.stringify({}) });
+      savedRounds = [body.round, ...savedRounds];
+      renderSavedRounds();
+      renderRoundControls();
+      renderAdminState();
+      return body.round;
+    } catch (error) {
+      showToast(error.message, "error");
+      return null;
+    }
+  }
+
+  function archivedPlayerRows(roundState) {
+    const settlement = E.pointsSettlement(roundState.players, E.COURSE, roundState.settings);
+    const ledgerByPlayer = new Map(settlement.entries.map((entry) => [entry.playerId, entry]));
+    return E.gamePlayers(roundState.players).map((player) => {
+      const index = roundState.players.indexOf(player);
+      const tee = E.teeForPlayer(E.COURSE, player);
+      const handicap = E.playingHandicap(player.ghin, roundState.settings, tee);
+      const totals = E.playerTotals(player, E.COURSE, roundState.settings, roundState.players);
+      const ghinAdjusted = E.ghinAdjustedTotal(player, E.COURSE, roundState.settings);
+      const tics = E.ticSummary(player, roundState.players, E.COURSE, roundState.settings);
+      const ledger = ledgerByPlayer.get(player.id);
+      const netClass = ledger.settledNet > 0 ? "is-positive" : ledger.settledNet < 0 ? "is-negative" : "";
+      return `<tr><td>${playerNameHtml(player, index)}</td><td>${displayPlayingHandicap(handicap)}</td><td>${player.group}</td><td>${leaderboardThruText(player, totals)}</td><td>${complete(totals.total.gross, totals.total.completed)}</td><td>${complete(ghinAdjusted.gross, ghinAdjusted.completed)}</td><td>${complete(totals.total.net, totals.total.completed)}</td><td>${tics.eagles}</td><td>${tics.birdies}</td><td>${tics.sandies}</td><td class="kp-count-column" title="KPs won">${tics.kps}</td><td>${tics.skins}</td><td>${tics.frontWeight}</td><td>${tics.backWeight}</td><td>${tics.totalNetWeight}</td><td class="points-positive">${ledger.positive ? `+${ledger.positive.toFixed(1)}` : "0.0"}</td><td class="points-negative">${ledger.negative.toFixed(1)}</td><td class="points-net ${netClass}">${settledPointText(ledger.settledNet, settlement.complete)}</td></tr>`;
+    }).join("") + bccTipsRow(settlement, LEADERBOARD_COLUMNS.length);
+  }
+
+  async function fetchSavedRound(id) {
+    const body = await databaseRequest(`/api/rounds/${encodeURIComponent(id)}`, { cache: "no-store" });
+    return body.round;
+  }
+
+  async function handleSavedRoundAction(action, id) {
+    try {
+      if (action === "delete") {
+        const item = savedRounds.find((round) => round.id === id);
+        if (!item || !window.confirm(`Delete the saved copy of ${item.roundName}?`)) return;
+        await databaseRequest(`/api/rounds/${encodeURIComponent(id)}`, { method: "DELETE" });
+        savedRounds = savedRounds.filter((round) => round.id !== id);
+        renderSavedRounds();
+        return showToast("Saved round deleted.", "success");
+      }
+      const round = await fetchSavedRound(id);
+      if (action === "print") {
+        preparePrintReport(round.state);
+        window.print();
+        return;
+      }
+      if (action === "download") {
+        return downloadBlob(JSON.stringify(round.state, null, 2), "application/json", `berry-creek-${round.date}-saved.json`);
+      }
+      if (action === "roster") {
+        pendingReuseRound = round;
+        const sourceState = R.normalizeState(round.state);
+        $("#reuseRosterText").textContent = `${sourceState.players.length} players and their Group A–F assignments will be copied into a new round dated today. Scores, KPs, sand saves, tics, and the locked status will not be copied.`;
+        const dialog = $("#reuseRosterDialog");
+        dialog.returnValue = "cancel";
+        dialog.showModal();
+        return;
+      }
+      activeSavedRound = round;
+      const roundState = R.normalizeState(round.state);
+      $("#savedRoundDialogTitle").textContent = round.roundName;
+      $("#savedRoundDialogMeta").textContent = `${round.date} · ${round.playerCount} player${round.playerCount === 1 ? "" : "s"} · ${round.completed ? "Complete round" : "Saved before every score was entered"}`;
+      $("#savedRoundDialogBody").innerHTML = archivedPlayerRows(roundState);
+      $("#savedRoundHistoryCount").textContent = `${roundState.auditLog.length} recorded change${roundState.auditLog.length === 1 ? "" : "s"}`;
+      $("#savedRoundHistoryList").innerHTML = auditEntriesMarkup(roundState);
+      const groups = R.GROUPS.filter((group) => roundState.players.some((player) => player.group === group));
+      $("#savedRoundGroupSelect").innerHTML = groups.map((group) => `<option value="${group}">Group ${group}</option>`).join("");
+      $("#exportSavedRoundJpegBtn").disabled = groups.length === 0;
+      $("#exportSavedRoundPdfBtn").disabled = groups.length === 0;
+      $("#exportAllSavedRoundJpegsBtn").disabled = groups.length === 0;
+      $("#exportAllSavedRoundPdfBtn").disabled = groups.length === 0;
+      $("#savedRoundDialog").showModal();
+      requestAnimationFrame(updateScrollAffordances);
+    } catch (error) {
+      showToast(error.message, "error");
+    }
+  }
+
+  function auditEntriesMarkup(roundState, newestFirst = true) {
+    const log = [...(roundState.auditLog || [])];
+    if (newestFirst) log.reverse();
+    return log.length ? log.map((entry) => {
+      const when = Number.isNaN(Date.parse(entry.at)) ? entry.at : new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(entry.at));
+      return `<article class="audit-entry"><div><strong>${esc(entry.detail)}</strong><span>${esc(entry.actor)}</span></div><time>${esc(when)}</time></article>`;
+    }).join("") : '<div class="empty-state">No changes were recorded for this round.</div>';
+  }
+
+  function renderAudit() {
+    $("#auditList").innerHTML = auditEntriesMarkup(state);
+  }
+
+  function renderGroupProgress() {
+    const grid = $("#groupProgressGrid");
+    if (!grid) return;
+    grid.innerHTML = R.GROUPS.map((group) => {
+      const players = groupPlayers(group);
+      const completedHoles = players.length ? E.COURSE.holes.filter((_, holeIndex) => players.every((player) => player.scores[holeIndex] !== "")).length : 0;
+      const currentIndex = players.length ? E.COURSE.holes.findIndex((_, holeIndex) => players.some((player) => player.scores[holeIndex] === "")) : -1;
+      const missing = currentIndex >= 0 ? players.filter((player) => player.scores[currentIndex] === "").length : 0;
+      const activity = state.groupActivity[group];
+      const lastUpdate = activity?.at && !Number.isNaN(Date.parse(activity.at))
+        ? new Intl.DateTimeFormat(undefined, { dateStyle: "short", timeStyle: "short" }).format(new Date(activity.at))
+        : "No scoring activity";
+      const connected = Number(groupPresence[group] || 0);
+      const position = !players.length ? "No players" : completedHoles === 18 ? "Complete" : `Hole ${currentIndex + 1} · ${missing} missing`;
+      const scorekeeper = players.find((player) => player.id === state.settings.scorekeepers[group]);
+      const scorekeeperText = !players.length ? "No scorekeeper needed" : scorekeeper ? `Scorekeeper: ${nameOf(scorekeeper, state.players.indexOf(scorekeeper))}` : "Scorekeeper: Not assigned";
+      const progress = Math.round((completedHoles / 18) * 100);
+      return `<article class="group-progress-card ${completedHoles === 18 ? "is-complete" : ""}"><div class="group-progress-heading"><strong>Group ${group}</strong><span class="presence-label ${connected ? "is-connected" : ""}"><span class="status-dot"></span>${connected ? `${connected} connected` : "Not connected"}</span></div><div class="group-scorekeeper-status ${players.length && !scorekeeper ? "is-unassigned" : ""}">${esc(scorekeeperText)}</div><div class="group-progress-body"><div class="group-progress-ring" style="--progress:${progress}" role="img" aria-label="${completedHoles} of 18 holes complete"><span class="group-progress-ring-value">${completedHoles}<small>/18</small></span></div><div class="group-progress-details"><div class="group-progress-meta"><span>${players.length}/5 players</span><span>${position}</span></div><small>${esc(lastUpdate)}</small></div></div></article>`;
+    }).join("");
+  }
+
+  function finalizationChecklistItems() {
+    const items = [];
+    if (!state.players.length) items.push({ ok: false, text: "No players are assigned to the round." });
+    else {
+      const competitiveCount = E.gamePlayers(state.players).length;
+      const scoreOnlyCount = state.players.length - competitiveCount;
+      items.push({ ok: competitiveCount > 0, text: `${state.players.length} players are assigned: ${competitiveCount} in the game${scoreOnlyCount ? ` and ${scoreOnlyCount} score only` : ""}.` });
+    }
+    R.GROUPS.forEach((group) => {
+      const players = groupPlayers(group);
+      if (!players.length) return;
+      const missing = players.reduce((total, player) => total + player.scores.filter((score) => score === "").length, 0);
+      items.push({ ok: missing === 0, text: missing ? `Group ${group} has ${missing} missing score${missing === 1 ? "" : "s"}.` : `Group ${group} has all scores entered.` });
+    });
+    const kpResults = KP_HOLES.map((hole) => {
+      const player = state.players.find((item) => item.id === state.settings.kpWinners[String(hole)]);
+      return { hole, status: player ? E.kpClaimStatus(player, E.COURSE, state.settings, hole - 1, state.players) : "none" };
+    });
+    const missingKps = kpResults.filter((result) => result.status === "none").map((result) => result.hole);
+    const pendingKps = kpResults.filter((result) => result.status === "pending").map((result) => result.hole);
+    const noAwardKps = kpResults.filter((result) => result.status === "marked").map((result) => result.hole);
+    if (missingKps.length) items.push({ ok: false, text: `KP${missingKps.length === 1 ? " is" : "s are"} unassigned on Hole${missingKps.length === 1 ? "" : "s"} ${missingKps.join(", ")}.` });
+    if (pendingKps.length) items.push({ ok: false, text: `KP score${pendingKps.length === 1 ? " is" : "s are"} pending on Hole${pendingKps.length === 1 ? "" : "s"} ${pendingKps.join(", ")}.` });
+    if (noAwardKps.length) items.push({ ok: true, text: `No KP tic is awarded on Hole${noAwardKps.length === 1 ? "" : "s"} ${noAwardKps.join(", ")} because the latest marked player scored over par.` });
+    if (!missingKps.length && !pendingKps.length && !noAwardKps.length) items.push({ ok: true, text: "All KPs are assigned and qualifying." });
+    const unusualScores = state.players.flatMap((player, playerIndex) => player.scores.flatMap((score, holeIndex) => {
+      const par = E.COURSE.holes[holeIndex].par;
+      return score !== "" && (Number(score) <= par - 3 || Number(score) >= par + 5)
+        ? [{ player: nameOf(player, playerIndex), hole: holeIndex + 1, score: Number(score), par }]
+        : [];
+    }));
+    items.push({
+      ok: unusualScores.length === 0,
+      text: unusualScores.length
+        ? `${unusualScores.length} unusual score${unusualScores.length === 1 ? " needs" : "s need"} final review: ${unusualScores.map((item) => `${item.player} — Hole ${item.hole}: ${item.score} (par ${item.par})`).join("; ")}.`
+        : "No unusual scores need review."
+    });
+    const namedPlayers = state.players.filter((player) => player.name.trim());
+    const reusableNames = state.players.filter((player) => !player.isGuest).map((player) => player.name.trim().toLowerCase()).filter(Boolean);
+    const namesReady = namedPlayers.length === state.players.length && new Set(reusableNames).size === reusableNames.length;
+    items.push({ ok: namesReady, text: namesReady ? "All player names are complete; repeated guest names are allowed." : "One or more player names are missing, or a non-guest name is duplicated." });
+    return items;
+  }
+
+  function openFinalizeDialog() {
+    const items = finalizationChecklistItems();
+    $("#finalizeChecklist").innerHTML = items.map((item) => `<li class="${item.ok ? "check-ok" : "check-warning"}"><span aria-hidden="true">${item.ok ? "✓" : "!"}</span>${esc(item.text)}</li>`).join("");
+    const complete = roundHasCompleteScores();
+    $("#finalizeConfirmBtn").disabled = !complete;
+    $("#finalizeBlockingMessage").hidden = complete;
+    const dialog = $("#finalizeDialog");
+    dialog.returnValue = "cancel";
+    dialog.showModal();
+  }
+
+  async function lockAndSaveCurrentRound() {
+    if (!roundHasCompleteScores()) return showToast("Complete every player's 18-hole scorecard before locking and saving the round.", "error");
+    if (!await dispatch({ type: "SET_LOCKED", payload: { locked: true } })) return;
+    const saved = await saveCurrentRound();
+    if (!saved) {
+      await dispatch({ type: "SET_LOCKED", payload: { locked: false } });
+      return showToast("The round could not be saved, so it remains active and unlocked.", "error");
+    }
+    showToast(`${saved.roundName} was locked and saved to round history.`, "success");
+  }
+
+  function renderReadiness() {
+    const status = $("#readinessStatus");
+    const list = $("#readinessList");
+    const systemDetails = $("#systemDetails");
+    const systemList = $("#systemChecksList");
+    if (!status || !list) return;
+    if (!adminUnlocked) {
+      status.textContent = "Sign in as an admin to run the readiness checks.";
+      list.innerHTML = "";
+      if (systemDetails) systemDetails.hidden = true;
+      if (systemList) systemList.innerHTML = "";
+      return;
+    }
+    if (connectionMode !== "live") {
+      status.textContent = "Connect to the server to run readiness checks.";
+      list.innerHTML = "";
+      if (systemDetails) systemDetails.hidden = true;
+      return;
+    }
+    if (readinessLoading) {
+      status.textContent = "Running readiness checks…";
+      return;
+    }
+    if (readinessData?.error) {
+      status.textContent = readinessData.error;
+      list.innerHTML = "";
+      if (systemDetails) systemDetails.hidden = true;
+      return;
+    }
+    const checks = Array.isArray(readinessData?.checks) ? readinessData.checks : [];
+    if (!checks.length) {
+      status.textContent = "Select Run checks to verify the server and event setup.";
+      list.innerHTML = "";
+      if (systemDetails) systemDetails.hidden = true;
+      if (systemList) systemList.innerHTML = "";
+      return;
+    }
+    const labels = { ready: "Ready for play", attention: "Usable, with items to review", "not-ready": "Not ready for live scoring" };
+    const checkedAt = new Date(readinessData.checkedAt).toLocaleString();
+    status.textContent = `${labels[readinessData.status] || "Checks complete"} · Checked ${checkedAt}`;
+    list.innerHTML = checks.map((check) => {
+      const stateClass = check.ok ? "is-ready" : check.severity === "warning" ? "is-warning" : "is-error";
+      const icon = check.ok ? "✓" : "!";
+      return `<li class="${stateClass}"><span class="readiness-icon" aria-hidden="true">${icon}</span><div><strong>${esc(check.label)}</strong><small>${esc(check.detail)}</small></div></li>`;
+    }).join("");
+    const systemChecks = Array.isArray(readinessData?.systemChecks) ? readinessData.systemChecks : [];
+    if (systemDetails) systemDetails.hidden = systemChecks.length === 0;
+    if (systemList) systemList.innerHTML = systemChecks.map((check) => {
+      const stateClass = check.ok ? "is-ready" : check.severity === "warning" ? "is-warning" : "is-error";
+      const icon = check.ok ? "✓" : "!";
+      return `<li class="${stateClass}"><span class="readiness-icon" aria-hidden="true">${icon}</span><div><strong>${esc(check.label)}</strong><small>${esc(check.detail)}</small></div></li>`;
+    }).join("");
+  }
+
+  function renderAdminManagement(errorMessage = "") {
+    const status = $("#adminManagementStatus");
+    const list = $("#adminList");
+    const setupForm = $("#bootstrapAdminForm");
+    const inviteControls = $("#adminInviteControls");
+    const inviteResult = $("#adminInviteResult");
+    if (!status || !list) return;
+    if (!adminUnlocked) {
+      status.textContent = "Sign in as an admin to manage administrators.";
+      setupForm.hidden = true;
+      inviteControls.hidden = true;
+      list.innerHTML = "";
+      return;
+    }
+    if (errorMessage) {
+      status.textContent = errorMessage;
+      setupForm.hidden = true;
+      inviteControls.hidden = true;
+      list.innerHTML = "";
+      return;
+    }
+    const setupRequired = Boolean(currentAdmin?.bootstrap);
+    const signedInAdmin = admins.find((admin) => admin.id === currentAdmin?.id);
+    const signedInPlayer = savedPlayers.find((player) => player.id === signedInAdmin?.playerId);
+    const signedInName = signedInPlayer?.name || signedInAdmin?.name || currentAdmin?.name || "Admin";
+    status.textContent = setupRequired ? "Create the first named admin. The setup PIN will stop working immediately afterward." : `Signed in as ${signedInName}. Each admin action is recorded under that name.`;
+    setupForm.hidden = !setupRequired;
+    inviteControls.hidden = setupRequired;
+    inviteResult.hidden = !adminInviteLink;
+    if (adminInviteLink) $("#adminInviteUrl").value = adminInviteLink;
+    if (setupRequired) {
+      list.innerHTML = '<div class="empty-state">No named admins have been created yet.</div>';
+      return;
+    }
+    list.innerHTML = admins.length ? admins.map((admin) => {
+      const isCurrent = admin.id === currentAdmin?.id;
+      const lastLogin = admin.lastLoginAt ? `Last signed in ${new Date(admin.lastLoginAt).toLocaleString()}` : "Has not signed in yet";
+      const linkedPlayer = savedPlayers.find((player) => player.id === admin.playerId);
+      const displayName = linkedPlayer?.name || admin.name;
+      const linkedOptions = savedPlayers.map((player) => {
+        const owner = admins.find((candidate) => candidate.id !== admin.id && candidate.playerId === player.id);
+        return `<option value="${esc(player.id)}" ${admin.playerId === player.id ? "selected" : ""} ${owner ? "disabled" : ""}>${esc(player.name)}${owner ? ` · linked to ${esc(owner.name)}` : ""}</option>`;
+      }).join("");
+      return `<article class="admin-row ${isCurrent ? "is-current" : ""}" data-admin-id="${esc(admin.id)}"><label>Name (match GHIN)<input class="admin-account-name admin-control" data-allow-locked="true" type="text" maxlength="40" value="${esc(displayName)}" required><span class="admin-last-login">Saving sets the login to first.last · ${esc(lastLogin)}${isCurrent ? " · Your account" : ""}</span></label><label class="admin-player-link">Linked player<select class="admin-linked-player admin-control" data-allow-locked="true"><option value="">No linked player</option>${linkedOptions}</select><span>One login provides both admin and player access. The account name stays synchronized with this saved player.</span></label>${isCurrent ? '<label>New private PIN<input class="admin-account-pin admin-control" data-allow-locked="true" type="password" inputmode="numeric" minlength="4" maxlength="10" pattern="[0-9]{4,10}" autocomplete="new-password" placeholder="Leave blank to keep"></label>' : '<div class="admin-row-meta"><strong>PIN remains private</strong><span>Only this admin can change it.</span></div>'}<div class="admin-row-actions"><button class="button button-primary admin-control" data-allow-locked="true" data-admin-action="update" type="button">Save changes</button>${isCurrent ? "" : '<button class="button button-danger admin-control" data-allow-locked="true" data-admin-action="remove" type="button">Remove</button>'}</div></article>`;
+    }).join("") : '<div class="empty-state">No named admins found.</div>';
+    document.querySelectorAll("[data-admin-action='update']").forEach((button) => button.addEventListener("click", () => updateAdminAccount(button.closest(".admin-row"))));
+    document.querySelectorAll("[data-admin-action='remove']").forEach((button) => button.addEventListener("click", () => removeAdminAccount(button.closest(".admin-row"))));
+    document.querySelectorAll(".admin-linked-player").forEach((select) => select.addEventListener("change", () => {
+      const linkedPlayer = savedPlayers.find((player) => player.id === select.value);
+      if (linkedPlayer) select.closest(".admin-row").querySelector(".admin-account-name").value = linkedPlayer.name;
+    }));
+  }
+
+  async function createFirstAdmin(event) {
+    event.preventDefault();
+    const name = $("#bootstrapAdminName").value.trim();
+    const pin = $("#bootstrapAdminPin").value.trim();
+    try {
+      const body = await databaseRequest("/api/admins", { method: "POST", body: JSON.stringify({ name, pin }) });
+      authToken = body.token;
+      currentUser = body.sessionAdmin || body.admin;
+      currentAdmin = currentUser;
+      adminUnlocked = true;
+      localStorage.setItem(SESSION_KEY, authToken);
+      $("#bootstrapAdminForm").reset();
+      await loadAdminData();
+      showToast(`${body.admin.name} is now the first named admin. The setup PIN is disabled.`, "success");
+    } catch (error) {
+      showToast(error.message, "error");
+    }
+  }
+
+  async function createAdminInvitation() {
+    if (location.protocol !== "https:" && !["localhost", "127.0.0.1"].includes(location.hostname)) return showToast("Open the hosted HTTPS app before creating a private admin link.", "error");
+    try {
+      const body = await databaseRequest("/api/admin-invitations", { method: "POST", body: JSON.stringify({ hours: 24 }) });
+      const url = new URL(location.origin + location.pathname);
+      url.hash = `admin-invite=${body.invitation.token}`;
+      adminInviteLink = url.toString();
+      $("#adminInviteExpiry").textContent = `Single-use link · Expires ${new Date(body.invitation.expiresAt).toLocaleString()}`;
+      renderAdminManagement();
+      renderAdminState();
+      showToast("Private admin setup link created.", "success");
+    } catch (error) {
+      showToast(error.message, "error");
+    }
+  }
+
+  async function updateAdminAccount(row) {
+    const id = row?.dataset.adminId;
+    const name = row?.querySelector(".admin-account-name")?.value.trim();
+    const playerId = row?.querySelector(".admin-linked-player")?.value || "";
+    const pin = row?.querySelector(".admin-account-pin")?.value.trim() || "";
+    if (!name) return showToast("Enter the GHIN-matching account name before saving.", "error");
+    try {
+      const body = await databaseRequest(`/api/admins/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify({ name, playerId, ...(pin ? { pin } : {}) }) });
+      if (id === currentAdmin?.id) {
+        currentUser = body.sessionAdmin || body.admin;
+        currentAdmin = currentUser;
+        if (body.token) { authToken = body.token; localStorage.setItem(SESSION_KEY, authToken); }
+        applyUserGroupDefault(true);
+      }
+      await Promise.all([loadSavedPlayers(), loadAdmins()]);
+      renderSavedPlayers();
+      renderAdminManagement();
+      if (id === currentAdmin?.id) await connect();
+      showToast(`${body.admin.name}'s account was updated. Login: ${body.admin.username}${body.retiredPlayerLogin ? "; the separate player login was retired" : ""}.`, "success");
+    } catch (error) {
+      showToast(error.message, "error");
+    }
+  }
+
+  async function removeAdminAccount(row) {
+    const id = row?.dataset.adminId;
+    const admin = admins.find((item) => item.id === id);
+    if (!admin || !window.confirm(`Remove ${admin.name}'s admin access? Their prior actions will remain identified in Change History.`)) return;
+    try {
+      await databaseRequest(`/api/admins/${encodeURIComponent(id)}`, { method: "DELETE" });
+      admins = admins.filter((item) => item.id !== id);
+      renderAdminManagement();
+      renderAdminState();
+      showToast(`${admin.name}'s admin access was removed.`, "success");
+    } catch (error) {
+      showToast(error.message, "error");
+    }
+  }
+
+  function adminInvitationToken() {
+    const match = location.hash.match(/^#admin-invite=([A-Za-z0-9_-]{40,60})$/);
+    return match ? match[1] : "";
+  }
+
+  function openAdminInvitation() {
+    if (!adminInvitationToken()) return;
+    $("#adminInviteError").hidden = true;
+    $("#adminInviteDialog").showModal();
+  }
+
+  async function acceptAdminInvitation(event) {
+    event.preventDefault();
+    const token = adminInvitationToken();
+    const name = $("#invitedAdminName").value.trim();
+    const pin = $("#invitedAdminPin").value.trim();
+    const confirmation = $("#invitedAdminPinConfirm").value.trim();
+    const errorBox = $("#adminInviteError");
+    if (pin !== confirmation) {
+      errorBox.textContent = "The PIN entries do not match.";
+      errorBox.hidden = false;
+      return;
+    }
+    try {
+      const response = await fetch("/api/admin-invitations/accept", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, name, pin }) });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || "The invitation could not be accepted");
+      authToken = body.token;
+      adminUnlocked = true;
+      currentUser = body.account || body.admin;
+      currentAdmin = currentUser;
+      localStorage.setItem(SESSION_KEY, authToken);
+      const cleanUrl = new URL(location.href);
+      cleanUrl.hash = "";
+      history.replaceState(null, "", cleanUrl);
+      $("#adminInviteDialog").close();
+      $("#acceptAdminInviteForm").reset();
+      render();
+      await loadAdminData();
+      switchView("tournament");
+      showToast(`Admin access created for ${body.admin.name}.`, "success");
+    } catch (error) {
+      errorBox.textContent = error.message;
+      errorBox.hidden = false;
+    }
+  }
+
+  function playerInvitationToken() {
+    const match = location.hash.match(/^#player-invite=([A-Za-z0-9_-]{40,60})$/);
+    return match ? match[1] : "";
+  }
+
+  async function openPlayerInvitation() {
+    const token = playerInvitationToken();
+    if (!token) return;
+    const errorBox = $("#playerInviteError");
+    const usernameInput = $("#invitedPlayerUsername");
+    const submitButton = $("#acceptPlayerInviteBtn");
+    errorBox.hidden = true;
+    usernameInput.value = "Loading…";
+    submitButton.disabled = true;
+    $("#playerInviteDialog").showModal();
+    try {
+      const response = await fetch(`/api/player-invitations/preview?token=${encodeURIComponent(token)}`, { cache: "no-store" });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || "The invitation could not be opened");
+      usernameInput.value = body.username;
+      submitButton.disabled = false;
+      requestAnimationFrame(() => $("#invitedPlayerPin").focus());
+    } catch (error) {
+      usernameInput.value = "";
+      errorBox.textContent = error.message;
+      errorBox.hidden = false;
+    }
+  }
+
+  async function acceptPlayerInvitation(event) {
+    event.preventDefault();
+    const token = playerInvitationToken();
+    const pin = $("#invitedPlayerPin").value.trim();
+    const confirmation = $("#invitedPlayerPinConfirm").value.trim();
+    const errorBox = $("#playerInviteError");
+    if (pin !== confirmation) {
+      errorBox.textContent = "The PIN entries do not match.";
+      errorBox.hidden = false;
+      return;
+    }
+    try {
+      const response = await fetch("/api/player-invitations/accept", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, pin }) });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || "The invitation could not be accepted");
+      authToken = body.token;
+      currentUser = body.account;
+      adminUnlocked = false;
+      currentAdmin = null;
+      admins = [];
+      savedPlayers = [];
+      savedRounds = [];
+      shareTokens = {};
+      readinessData = null;
+      localStorage.setItem(SESSION_KEY, authToken);
+      groupWasChosen = false;
+      applyUserGroupDefault(true);
+      const cleanUrl = new URL(location.href);
+      cleanUrl.hash = "";
+      history.replaceState(null, "", cleanUrl);
+      $("#playerInviteDialog").close();
+      $("#acceptPlayerInviteForm").reset();
+      render();
+      switchView("score");
+      showToast(`${body.wasReset ? "Login reset" : "Player access created"} for ${body.player.name}. You are signed in.`, "success");
+    } catch (error) {
+      errorBox.textContent = error.message;
+      errorBox.hidden = false;
+    }
+  }
+
+  function renderRoundControls() {
+    const locked = isLocked();
+    const saved = currentRoundIsLockedAndSaved();
+    const complete = roundHasCompleteScores();
+    $("#roundStatusText").textContent = locked
+      ? saved ? "The round is locked and saved. Scorecards and results remain available to view." : "The round is locked but has not yet been saved."
+      : "The round is active and open for live scoring.";
+    $("#toggleRoundLockBtn").textContent = locked ? "Unlock round" : "Lock & Save Round";
+    $("#toggleRoundLockBtn").dataset.icon = locked ? "unlock" : "lock";
+    $("#toggleRoundLockBtn").classList.toggle("button-danger", !locked);
+    $("#toggleRoundLockBtn").classList.toggle("button-primary", locked);
+    $("#saveRoundBtn").textContent = saved ? "Round Saved" : "Save Round";
+    $("#saveRoundBtn").dataset.icon = "save";
+    $("#saveRoundStatusText").textContent = saved
+      ? "This locked round is preserved in historical reference."
+      : complete
+        ? "All scorecards are complete. Save a historical copy, or use Lock & Save Round."
+        : "Complete every player's 18-hole scorecard before saving a historical copy.";
+  }
+
+  function renderTournament() {
+    renderRoundControls();
+    $("#soundToggle").checked = preferences.sound;
+    $("#autoAdvanceToggle").checked = preferences.autoAdvance;
+    $("#displayMode").value = preferences.display;
+    renderGroupProgress();
+    renderSpectatorSharing();
+    renderGroupSharing();
+    renderSavedRounds();
+    renderAudit();
+    renderReadiness();
+    renderAdminManagement();
+  }
+
+  function renderAdminState() {
+    const adminButton = $("#adminBtn");
+    adminButton.textContent = currentUser ? `Sign out · ${currentUser.name}` : "Sign in";
+    adminButton.dataset.compactLabel = currentUser ? "Logout" : "Login";
+    adminButton.setAttribute("aria-label", currentUser ? `Sign out ${currentUser.name}` : "Sign in");
+    adminButton.title = currentUser ? `Sign out ${currentUser.name}` : "Sign in";
+    $("#setupLockedNotice").hidden = adminUnlocked;
+    document.querySelectorAll(".admin-control").forEach((control) => {
+      const isRoundLockControl = control.id === "toggleRoundLockBtn";
+      const isSaveRoundControl = control.id === "saveRoundBtn";
+      const isNewRoundControl = control.id === "startNewRoundBtn";
+      const availableWhenLocked = control.dataset.allowLocked === "true" || ["toggleRoundLockBtn", "saveRoundBtn", "startNewRoundBtn", "completeBackupBtn", "completeRestoreInput", "createSnapshotBtn", "refreshReadinessBtn"].includes(control.id);
+      const atPlayerLimit = ["addGuestBtn", "saveGuestBtn"].includes(control.id) && state.players.length >= R.MAX_PLAYERS;
+      const noRoundToSave = isSaveRoundControl && (!roundHasCompleteScores() || currentRoundIsLockedAndSaved());
+      control.disabled = !adminUnlocked || (isLocked() && !availableWhenLocked) || atPlayerLimit || noRoundToSave;
+    });
+    $("#lockStatus").hidden = false;
+    $("#lockStatus").textContent = isLocked() ? "Round Locked" : "Round Active";
+    $("#lockStatus").classList.toggle("is-active", !isLocked());
+    $("#spectatorStatus").hidden = !spectatorMode;
+    document.body.classList.toggle("round-locked", isLocked());
+    document.body.classList.toggle("spectator-mode", spectatorMode);
+    if (!adminUnlocked || isLocked()) playerEntryMode = "";
+    renderPlayerEntryPanels();
+    renderIndexUpdateState();
+  }
+
+  function render() {
+    $("#roundName").value = state.roundName;
+    $("#roundDate").value = state.date;
+    $("#allowance").value = state.settings.allowance;
+    const photoEmailInput = $("#photoEmailInput");
+    if (document.activeElement !== photoEmailInput) photoEmailInput.value = state.settings.photoEmail || "";
+    const savedPlayerTee = $("#savedPlayerTee");
+    const selectedSavedTee = savedPlayerTee.value || E.COURSE.defaultTee;
+    savedPlayerTee.innerHTML = teeOptions(selectedSavedTee);
+    const guestPlayerTee = $("#guestPlayerTee");
+    const selectedGuestTee = guestPlayerTee.value || E.COURSE.defaultTee;
+    guestPlayerTee.innerHTML = teeOptions(selectedGuestTee);
+    renderDraftHandicaps();
+    const guestPlayerGroup = $("#guestPlayerGroup");
+    let selectedGuestGroup = R.GROUPS.includes(guestPlayerGroup.value) ? guestPlayerGroup.value : nextAvailableGroup();
+    if (groupPlayers(selectedGuestGroup).length >= R.MAX_GROUP_SIZE) selectedGuestGroup = nextAvailableGroup();
+    guestPlayerGroup.innerHTML = savedGroupOptions(selectedGuestGroup);
+    renderPlayers();
+    renderSavedPlayers();
+    renderGroupScoring();
+    renderHoleComments();
+    renderLeaderboard();
+    renderTournament();
+    renderAdminState();
+    renderRoundIdentity();
+    requestAnimationFrame(updateScrollAffordances);
+  }
+
+  function switchView(name) {
+    if (spectatorMode) name = "leaderboard";
+    document.querySelectorAll(".tab").forEach((tab) => {
+      const active = tab.dataset.view === name;
+      tab.classList.toggle("active", active);
+      tab.setAttribute("aria-selected", String(active));
+    });
+    document.querySelectorAll(".view").forEach((view) => {
+      const active = view.id === `${name}View`;
+      view.classList.toggle("active", active);
+      view.hidden = !active;
+    });
+    document.body.classList.toggle("score-view-active", name === "score");
+    document.body.dataset.activeView = name;
+    renderRoundIdentity();
+    requestAnimationFrame(updateScrollAffordances);
+    scheduleHeaderLayout();
+    updateLeaderboardWakeLock();
+  }
+
+  function leaderboardShouldStayAwake() {
+    const leaderboard = $("#leaderboardView");
+    const landscape = typeof window.matchMedia === "function"
+      ? window.matchMedia("(orientation: landscape)").matches
+      : window.innerWidth > window.innerHeight;
+    return Boolean(leaderboard && !leaderboard.hidden && landscape && document.visibilityState === "visible");
+  }
+
+  async function releaseLeaderboardWakeLock() {
+    const wakeLock = leaderboardWakeLock;
+    leaderboardWakeLock = null;
+    if (wakeLock && !wakeLock.released) await wakeLock.release().catch(() => {});
+  }
+
+  async function updateLeaderboardWakeLock() {
+    if (!leaderboardShouldStayAwake()) {
+      await releaseLeaderboardWakeLock();
+      return;
+    }
+    if (!navigator.wakeLock?.request || (leaderboardWakeLock && !leaderboardWakeLock.released) || leaderboardWakeLockRequesting) return;
+    leaderboardWakeLockRequesting = true;
+    try {
+      const wakeLock = await navigator.wakeLock.request("screen");
+      if (!leaderboardShouldStayAwake()) {
+        await wakeLock.release().catch(() => {});
+        return;
+      }
+      leaderboardWakeLock = wakeLock;
+      wakeLock.addEventListener("release", () => {
+        if (leaderboardWakeLock === wakeLock) leaderboardWakeLock = null;
+      }, { once: true });
+    } catch (_) {
+      leaderboardWakeLock = null;
+    } finally {
+      leaderboardWakeLockRequesting = false;
+    }
+  }
+
+  function moveToHole(nextHole, options = {}) {
+    clearTimeout(autoAdvanceTimer);
+    const missing = groupPlayers().filter((player) => !player.scores[selectedHole - 1]);
+    if (!options.skipMissingCheck && missing.length && nextHole !== selectedHole && !window.confirm(`Hole ${selectedHole} still has ${missing.length} missing score${missing.length === 1 ? "" : "s"}. Leave this hole anyway?`)) return;
+    selectedHole = nextHole;
+    renderGroupScoring();
+  }
+
+  function openAdminDialog() {
+    $("#loginUsernameInput").value = "";
+    $("#adminPinInput").value = "";
+    $("#adminError").hidden = true;
+    $("#adminDialog").showModal();
+    requestAnimationFrame(() => $("#loginUsernameInput").focus());
+  }
+
+  async function verifyAdmin() {
+    const username = $("#loginUsernameInput").value.trim();
+    const pin = $("#adminPinInput").value;
+    try {
+      if (connectionMode !== "live") throw new Error("Connect to the server to sign in");
+      const response = await fetch("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, pin }) });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || "Incorrect username or PIN");
+      authToken = body.token;
+      currentUser = body.account;
+      adminUnlocked = currentUser.role === "admin";
+      currentAdmin = adminUnlocked ? currentUser : null;
+      localStorage.setItem(SESSION_KEY, authToken);
+      groupWasChosen = false;
+      applyUserGroupDefault(true);
+      $("#adminDialog").close();
+      render();
+      if (adminUnlocked) await loadAdminData();
+      switchView(adminUnlocked && body.setupRequired ? "tournament" : "score");
+      showToast(body.setupRequired ? "Setup access unlocked. Create the first named admin in Settings." : `Signed in as ${currentUser.name}.`, "success");
+    } catch (error) {
+      $("#adminError").textContent = error.message;
+      $("#adminError").hidden = false;
+    }
+  }
+
+  function csvCell(value) { return `"${String(value ?? "").replace(/"/g, '""')}"`; }
+  function downloadBlob(contents, type, filename) {
+    const link = document.createElement("a");
+    const blob = contents instanceof Blob ? contents : new Blob([contents], { type });
+    link.href = URL.createObjectURL(blob);
+    link.download = filename;
+    link.hidden = true;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(link.href), 30000);
+  }
+
+  async function downloadCompleteBackup() {
+    const button = $("#completeBackupBtn");
+    const original = button.textContent;
+    button.disabled = true;
+    button.textContent = "Preparing backup…";
+    try {
+      const backup = await databaseRequest("/api/system-backup", { cache: "no-store" });
+      downloadBlob(JSON.stringify(backup, null, 2), "application/json", `berry-creek-complete-${state.date}.json`);
+      showToast("Complete backup downloaded.", "success");
+    } catch (error) {
+      showToast(error.message, "error");
+    } finally {
+      button.textContent = original;
+      renderAdminState();
+    }
+  }
+
+  async function restoreCompleteBackup(file) {
+    try {
+      const backup = JSON.parse(await file.text());
+      if (backup?.format !== "berry-creek-complete-backup") throw new Error("That file is not a Berry Creek complete backup.");
+      if (!window.confirm("Restore this complete backup? This replaces the active round, saved-player database, and saved-round history. A server snapshot of the current data will be created first.")) return;
+      const body = await databaseRequest("/api/system-backup/restore", { method: "POST", body: JSON.stringify({ backup }) });
+      saveQueue([]);
+      state = R.normalizeState(body.activeRound);
+      saveLocal();
+      selectedGroup = "A";
+      selectedHole = 1;
+      selectedCommentHole = 1;
+      shareTokens = {};
+      groupPresence = {};
+      await refreshState();
+      await loadAdminData();
+      showToast(`Complete backup restored: ${body.savedPlayerCount} saved players and ${body.savedRoundCount} saved rounds.`, "success");
+    } catch (error) {
+      showToast(error.message || "That complete backup could not be restored.", "error");
+    }
+  }
+
+  async function createServerSnapshot() {
+    const button = $("#createSnapshotBtn");
+    const original = button.textContent;
+    button.disabled = true;
+    button.textContent = "Creating…";
+    try {
+      await databaseRequest("/api/system-backup/snapshot", { method: "POST", body: "{}" });
+      await loadReadiness();
+      showToast("Server snapshot created.", "success");
+    } catch (error) {
+      showToast(error.message, "error");
+    } finally {
+      button.textContent = original;
+      renderAdminState();
+    }
+  }
+
+  function safeFilePart(value) {
+    return String(value || "scorecard").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "scorecard";
+  }
+
+  function savedRoundExportOptions(roundState, group) {
+    return {
+      course: E.COURSE,
+      settings: roundState.settings,
+      players: roundState.players.filter((player) => player.group === group),
+      allPlayers: roundState.players,
+      group,
+      roundName: roundState.roundName,
+      date: roundState.date,
+      scoring: E,
+      logoUrl: `app-icon-master.png?v=${APP_VERSION}`
+    };
+  }
+
+  async function exportSavedRoundJpeg() {
+    if (!activeSavedRound) return;
+    const roundState = R.normalizeState(activeSavedRound.state);
+    const group = $("#savedRoundGroupSelect").value;
+    const button = $("#exportSavedRoundJpegBtn");
+    const originalLabel = button.textContent;
+    button.disabled = true;
+    button.textContent = "Creating JPEG…";
+    try {
+      const jpeg = await X.createScorecardJpeg(savedRoundExportOptions(roundState, group));
+      downloadBlob(jpeg, "image/jpeg", `${safeFilePart(roundState.roundName)}-group-${group.toLowerCase()}.jpg`);
+      showToast(`Saved Group ${group} scorecard exported.`, "success");
+    } catch (error) {
+      showToast(error.message || "The saved scorecard could not be exported.", "error");
+    } finally {
+      button.textContent = originalLabel;
+      button.disabled = !activeSavedRound;
+    }
+  }
+
+  async function exportSavedRoundPdf() {
+    if (!activeSavedRound) return;
+    const roundState = R.normalizeState(activeSavedRound.state);
+    const group = $("#savedRoundGroupSelect").value;
+    const button = $("#exportSavedRoundPdfBtn");
+    const originalLabel = button.textContent;
+    button.disabled = true;
+    button.textContent = "Creating PDF…";
+    try {
+      const jpeg = await X.createScorecardJpeg(savedRoundExportOptions(roundState, group));
+      const pdf = await X.createScorecardPdf(jpeg);
+      downloadBlob(pdf, "application/pdf", `${safeFilePart(roundState.roundName)}-group-${group.toLowerCase()}.pdf`);
+      showToast(`Saved Group ${group} scorecard exported as a PDF.`, "success");
+    } catch (error) {
+      showToast(error.message || "The saved scorecard PDF could not be exported.", "error");
+    } finally {
+      button.textContent = originalLabel;
+      button.disabled = !activeSavedRound;
+    }
+  }
+
+  async function exportAllSavedRoundJpegs() {
+    if (!activeSavedRound) return;
+    const roundState = R.normalizeState(activeSavedRound.state);
+    const groups = R.GROUPS.filter((group) => roundState.players.some((player) => player.group === group));
+    if (!groups.length) return showToast("This saved round has no group scorecards to export.", "error");
+    const button = $("#exportAllSavedRoundJpegsBtn");
+    const originalLabel = button.textContent;
+    button.disabled = true;
+    try {
+      const files = [];
+      for (let index = 0; index < groups.length; index += 1) {
+        const group = groups[index];
+        button.textContent = `Creating ${index + 1} of ${groups.length}…`;
+        const blob = await X.createScorecardJpeg(savedRoundExportOptions(roundState, group));
+        files.push({ name: `${safeFilePart(roundState.roundName)}-group-${group.toLowerCase()}.jpg`, blob });
+      }
+      const archive = await X.createZip(files);
+      downloadBlob(archive, "application/zip", `${safeFilePart(roundState.roundName)}-scorecards.zip`);
+      showToast(`${groups.length} saved group scorecards exported together.`, "success");
+    } catch (error) {
+      showToast(error.message || "The saved scorecards could not be exported.", "error");
+    } finally {
+      button.textContent = originalLabel;
+      button.disabled = !activeSavedRound;
+    }
+  }
+
+  async function exportAllSavedRoundPdf() {
+    if (!activeSavedRound) return;
+    const roundState = R.normalizeState(activeSavedRound.state);
+    const groups = R.GROUPS.filter((group) => roundState.players.some((player) => player.group === group));
+    if (!groups.length) return showToast("This saved round has no group scorecards to export.", "error");
+    const button = $("#exportAllSavedRoundPdfBtn");
+    const originalLabel = button.textContent;
+    button.disabled = true;
+    try {
+      const pages = [];
+      for (let index = 0; index < groups.length; index += 1) {
+        const group = groups[index];
+        button.textContent = `Creating ${index + 1} of ${groups.length}…`;
+        pages.push(await X.createScorecardJpeg(savedRoundExportOptions(roundState, group)));
+      }
+      const pdf = await X.createScorecardPdf(pages);
+      downloadBlob(pdf, "application/pdf", `${safeFilePart(roundState.roundName)}-all-scorecards.pdf`);
+      showToast(`${groups.length} saved group scorecards exported as one PDF.`, "success");
+    } catch (error) {
+      showToast(error.message || "The saved scorecards PDF could not be exported.", "error");
+    } finally {
+      button.textContent = originalLabel;
+      button.disabled = !activeSavedRound;
+    }
+  }
+
+  async function startFromSavedRoster() {
+    if (!pendingReuseRound) return;
+    const source = R.normalizeState(pendingReuseRound.state);
+    const nextState = R.defaultState();
+    nextState.roundName = source.roundName || "Berry Creek Round";
+    nextState.date = new Date().toISOString().slice(0, 10);
+    nextState.settings.allowance = source.settings.allowance;
+    nextState.players = source.players.map((player) => {
+      const saved = player.directoryId ? savedPlayers.find((item) => item.id === player.directoryId) : null;
+      return R.normalizePlayer({
+        id: makeId(),
+        directoryId: saved?.id || player.directoryId,
+        name: saved?.name || player.name,
+        ghin: saved?.ghin ?? player.ghin,
+        isGuest: saved ? false : player.isGuest,
+        inGame: player.inGame,
+        teeKey: saved?.teeKey || player.teeKey,
+        group: player.group
+      });
+    });
+    if (!await dispatch({ type: "START_FROM_SAVED", payload: { state: nextState } })) return;
+    pendingReuseRound = null;
+    selectedHole = 1;
+    selectedCommentHole = 1;
+    selectedGroup = "A";
+    shareTokens = {};
+    groupPresence = {};
+    selectedSavedPlayerId = "";
+    savedRosterGroupSelection = nextAvailableGroup();
+    scoreSyncStatus.clear();
+    await refreshState().catch(() => {});
+    await loadShareTokens();
+    switchView("setup");
+    showToast("New round created from the saved roster. Current saved-player details were used where available.", "success");
+  }
+
+  function reportHoleComments(round) {
+    return [...(round.holeComments || [])].sort((a, b) => Number(a.hole) - Number(b.hole) || String(a.createdAt).localeCompare(String(b.createdAt)));
+  }
+
+  function reportCommentIdentity(comment) {
+    return comment.authorGroup ? `Group ${comment.authorGroup}` : comment.authorRole === "admin" ? "Admin" : "Player";
+  }
+
+  function printHoleCommentsMarkup(round) {
+    const comments = reportHoleComments(round);
+    if (!comments.length) return "";
+    const groups = E.COURSE.holes.map((hole) => {
+      const holeComments = comments.filter((comment) => Number(comment.hole) === hole.number);
+      if (!holeComments.length) return "";
+      const rows = holeComments.map((comment) => `<tr><td>${esc(comment.authorName)}</td><td>${esc(reportCommentIdentity(comment))}</td><td>${esc(commentTimestamp(comment.createdAt) || "—")}</td><td>${esc(comment.text)}</td></tr>`).join("");
+      return `<section class="print-hole-comment-group"><h3>Hole ${hole.number}</h3><table><thead><tr><th>Commenter</th><th>Group</th><th>Time</th><th>Comment</th></tr></thead><tbody>${rows}</tbody></table></section>`;
+    }).join("");
+    return `<section class="print-hole-comments"><h2>Hole Comments</h2>${groups}</section>`;
+  }
+
+  function printRoundHistoryMarkup(round) {
+    const history = [...(round.auditLog || [])];
+    const rows = history.map((entry) => {
+      const when = Number.isNaN(Date.parse(entry.at)) ? entry.at : new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(entry.at));
+      return `<tr><td>${esc(when)}</td><td>${esc(entry.actor)}</td><td>${esc(entry.detail)}</td></tr>`;
+    }).join("");
+    return `<section class="print-round-history"><h2>Round Change History</h2><p>${history.length} recorded change${history.length === 1 ? "" : "s"}, shown from earliest to latest.</p>${rows ? `<table><thead><tr><th>Time</th><th>User</th><th>Change</th></tr></thead><tbody>${rows}</tbody></table>` : '<p>No changes were recorded for this round.</p>'}</section>`;
+  }
+
+  function downloadCsv() {
+    const reportState = leaderboardRound();
+    const settlement = E.pointsSettlement(reportState.players, E.COURSE, reportState.settings);
+    const ledgerByPlayer = new Map(settlement.entries.map((entry) => [entry.playerId, entry]));
+    const headers = ["Player", "Guest", "In Game", "Group", "Thru", "GHIN Index", "Tee", "Playing Handicap", ...E.COURSE.holes.map((hole) => `Hole ${hole.number}`), "Gross", "GHIN Adjusted Gross", "Net", "Birdies", "Eagles or Better", "Skins", "FN Tics", "BN Tics", "TN Tics", "Sandy", "KP Code (2/8/12/17)", "KPM Code (2/8/12/17)", "Raw Tics", "Weighted Tics", "Achievement Points", "Points Positive", "Points Negative", "Unrounded Net Points", "Net Points"];
+    const rows = reportState.players.map((player, index) => {
+      const totals = E.playerTotals(player, E.COURSE, reportState.settings, reportState.players);
+      const ghinAdjusted = E.ghinAdjustedTotal(player, E.COURSE, reportState.settings);
+      const tics = E.ticSummary(player, reportState.players, E.COURSE, reportState.settings);
+      const rawLedger = E.pointsLedger(player, reportState.players, E.COURSE, reportState.settings);
+      const ledger = ledgerByPlayer.get(player.id) || { ...rawLedger, settledNet: rawLedger.net };
+      const kpCode = E.kpCode(player, reportState.players, E.COURSE, reportState.settings, "kp");
+      const kpmCode = E.kpCode(player, reportState.players, E.COURSE, reportState.settings, "marked");
+      return [nameOf(player, index), player.isGuest ? "Yes" : "No", player.inGame ? "Yes" : "No", player.group, leaderboardThruText(player, totals), displayIndex(player.ghin), teeOf(player).name, displayPlayingHandicap(hcpForRound(player, reportState)), ...player.scores, totals.total.completed ? totals.total.gross : "", ghinAdjusted.completed ? ghinAdjusted.gross : "", totals.total.completed ? totals.total.net : "", tics.birdies, tics.eagles, tics.skins, tics.frontWeight, tics.backWeight, tics.totalNetWeight, tics.sandies, kpCode, kpmCode, tics.total, tics.weightedTics, tics.pointsEarned.toFixed(1), ledger.positive.toFixed(1), ledger.negative.toFixed(1), ledger.net.toFixed(1), settledPointText(ledger.settledNet, settlement.complete, false)].map(csvCell).join(",");
+    });
+    if (settlement.complete) {
+      const collectRow = Array(headers.length).fill("");
+      collectRow[0] = "Total to Collect";
+      collectRow[collectRow.length - 1] = settlement.totalToCollect.toFixed(0);
+      rows.push(collectRow.map(csvCell).join(","));
+      const tipsRow = Array(headers.length).fill("");
+      tipsRow[0] = "BCCC Tips";
+      tipsRow[tipsRow.length - 1] = settlement.tips.toFixed(0);
+      rows.push(tipsRow.map(csvCell).join(","));
+    }
+    const csvLines = [headers.map(csvCell).join(","), ...rows];
+    const comments = reportHoleComments(reportState);
+    if (comments.length) {
+      csvLines.push("", csvCell("Hole Comments"), ["Hole", "Commenter", "Group", "Time", "Comment"].map(csvCell).join(","));
+      comments.forEach((comment) => csvLines.push([`Hole ${comment.hole}`, comment.authorName, reportCommentIdentity(comment), commentTimestamp(comment.createdAt), comment.text].map(csvCell).join(",")));
+    }
+    downloadBlob(csvLines.join("\r\n"), "text/csv;charset=utf-8", `berry-creek-results-${reportState.date}.csv`);
+  }
+
+  function preparePrintReport(roundState = null) {
+    const reportState = roundState ? R.normalizeState(roundState) : leaderboardRound();
+    const settlement = E.pointsSettlement(reportState.players, E.COURSE, reportState.settings);
+    const kpRows = KP_HOLES.map((hole) => {
+      const player = reportState.players.find((item) => item.id === reportState.settings.kpWinners[String(hole)]);
+      const status = player ? E.kpClaimStatus(player, E.COURSE, reportState.settings, hole - 1, reportState.players) : "none";
+      const kpName = status === "kp" ? esc(nameOf(player, reportState.players.indexOf(player))) : status === "pending" ? `${esc(nameOf(player, reportState.players.indexOf(player)))} (pending)` : "—";
+      const markedNames = (reportState.settings.kpClaims[String(hole)] || []).map((playerId) => reportState.players.find((item) => item.id === playerId)).filter((claimPlayer) => claimPlayer && E.isInGame(claimPlayer) && E.kpClaimStatus(claimPlayer, E.COURSE, reportState.settings, hole - 1, reportState.players) === "marked").map((claimPlayer) => esc(nameOf(claimPlayer, reportState.players.indexOf(claimPlayer))));
+      return `<tr><td>Hole ${hole}</td><td>${kpName}</td><td>${markedNames.length ? markedNames.join(" / ") : "None"}</td></tr>`;
+    }).join("");
+    const skinRows = E.COURSE.holes.map((hole, index) => {
+      const result = E.skinResult(reportState.players, E.COURSE, reportState.settings, index);
+      const player = reportState.players.find((item) => item.id === result.winnerId);
+      const pending = E.skinPendingLeaders(reportState.players, E.COURSE, reportState.settings, index).map((playerId) => reportState.players.find((item) => item.id === playerId)).filter(Boolean);
+      const resultText = result.status === "awarded" ? esc(nameOf(player, reportState.players.indexOf(player))) : result.status === "tie" ? "No skin — tie" : `Pending: ${pending.length ? pending.map((item) => esc(nameOf(item, reportState.players.indexOf(item)))).join(" / ") : "waiting for scores"}`;
+      return `<tr><td>${hole.number}</td><td>${resultText}</td></tr>`;
+    }).join("");
+    const groupPlayersForReport = (group) => reportState.players.filter((player) => player.group === group);
+    const groupTables = R.GROUPS.filter((group) => groupPlayersForReport(group).length).map((group) => `<section class="print-group"><h3>Group ${group} scorecard</h3><p>All tees use the standard Upper hole handicap ratings. Skin pops are capped at one stroke per hole, 1/2 on par 3s; Out, In, and Total net scores use each player's full HDCP. S marks a skin, KP marks the qualifying holder, KPM marks a claim that earned no tic, and an outlined KP is pending.</p><table><thead><tr><th>Player</th>${E.COURSE.holes.slice(0, 9).map((hole) => `<th>${hole.number}</th>`).join("")}<th>Out</th>${E.COURSE.holes.slice(9).map((hole) => `<th>${hole.number}</th>`).join("")}<th>In</th><th>Total</th></tr></thead><tbody>${groupPlayersForReport(group).map((player) => { const totals = E.playerTotals(player, E.COURSE, reportState.settings, reportState.players); const front = scorecardSegment(player, totals.front, 0, 9); const back = scorecardSegment(player, totals.back, 9, 18); const total = scorecardSegment(player, totals.total, 0, 18); const cells = player.scores.map((score, holeIndex) => `<td><span class="print-score-value${scoreMarkClasses(score, holeIndex)}">${score || "—"}</span><span class="print-dots">${"●".repeat(strokesReceivedFor(player, holeIndex, reportState))}</span>${scorecardIndicators(player, holeIndex, reportState)}</td>`); return `<tr class="${player.inGame ? "" : "score-only-row"}"><td>${esc(playerExportName(player, reportState.players.indexOf(player)))}</td>${cells.slice(0, 9).join("")}<td>${front.text}</td>${cells.slice(9).join("")}<td>${back.text}</td><td>${total.text}</td></tr>`; }).join("")}</tbody></table></section>`).join("");
+    const leaders = rankedPlayers(reportState).map((item) => `<tr><td>${playerNameHtml(item.player, item.index)}</td><td>${displayPlayingHandicap(hcpForRound(item.player, reportState))}</td><td>${item.player.group}</td><td>${leaderboardThruText(item.player, item.totals)}</td><td>${complete(item.totals.total.gross, item.totals.total.completed)}</td><td>${complete(item.ghinAdjusted.gross, item.ghinAdjusted.completed)}</td><td>${complete(item.totals.total.net, item.totals.total.completed)}</td><td>${item.tics.eagles}</td><td>${item.tics.birdies}</td><td>${item.tics.sandies}</td><td class="kp-count-column">${item.tics.kps}</td><td>${item.tics.skins}</td><td>${item.tics.frontWeight}</td><td>${item.tics.backWeight}</td><td>${item.tics.totalNetWeight}</td><td>+${item.ledger.positive.toFixed(1)}</td><td>${item.ledger.negative.toFixed(1)}</td><td>${settledPointText(item.ledger.settledNet, settlement.complete)}</td></tr>`).join("") + bccTipsRow(settlement, LEADERBOARD_COLUMNS.length);
+    const holeComments = printHoleCommentsMarkup(reportState);
+    const roundHistory = printRoundHistoryMarkup(reportState);
+    $("#printReport").innerHTML = `<header><img src="app-icon-master.png?v=${APP_VERSION}" alt="DH Game golfer"><div><h1>${esc(reportState.roundName)}</h1><p>${esc(reportState.date)} · The Club at Berry Creek</p></div></header><h2>Leaderboard</h2><table class="leaderboard"><thead><tr><th>PLAYER</th><th>HCP</th><th>G</th><th>THRU</th><th>TOT</th><th>GHIN</th><th>NET</th><th>E</th><th>B</th><th>SD</th><th class="kp-count-column">KP</th><th>S</th><th>FN</th><th>BN</th><th>TN</th><th>$+</th><th>$-</th><th>Net $</th></tr></thead><tbody>${leaders}</tbody></table><section class="print-leaderboard-legend"><h3>Leaderboard legend</h3><dl>${leaderboardLegendMarkup()}</dl></section><div class="print-columns"><section><h2>KPs</h2><table><thead><tr><th>Hole</th><th>KP</th><th>KPM</th></tr></thead><tbody>${kpRows}</tbody></table></section><section><h2>Net skins</h2><table><thead><tr><th>Hole</th><th>Winner</th></tr></thead><tbody>${skinRows}</tbody></table></section></div>${groupTables}${holeComments}${roundHistory}`;
+  }
+
+  async function checkVersion() {
+    try {
+      const response = await fetch(`/version.json?t=${Date.now()}`, { cache: "no-store" });
+      const latest = (await response.json()).version;
+      const current = latest === APP_VERSION;
+      $("#versionStatus").textContent = current ? "This device is current." : `Version ${latest} is available.`;
+      $("#updateBanner").hidden = current;
+      return current;
+    } catch (_) {
+      $("#versionStatus").textContent = "Update check unavailable.";
+      return false;
+    }
+  }
+
+  async function preserveCurrentRoundBeforeReset() {
+    const hasMeaningfulHistory = state.auditLog.some((entry) => entry.type !== "CLEAR_ROUND");
+    if ((!state.players.length && !state.holeComments.length && !hasMeaningfulHistory) || currentRoundIsLockedAndSaved()) return { ok: true, archived: false };
+    try {
+      const body = await databaseRequest("/api/rounds", { method: "POST", body: JSON.stringify({ preserveBeforeReset: true }) });
+      savedRounds = [body.round, ...savedRounds];
+      renderSavedRounds();
+      return { ok: true, archived: true };
+    } catch (error) {
+      showToast(`The current round was not cleared because its history could not be archived: ${error.message}`, "error");
+      return { ok: false, archived: false };
+    }
+  }
+
+  async function startNewRoundNow() {
+    const preservation = await preserveCurrentRoundBeforeReset();
+    if (!preservation.ok) return false;
+    selectedHole = 1;
+    selectedCommentHole = 1;
+    selectedGroup = "A";
+    selectedSavedPlayerId = "";
+    savedRosterGroupSelection = nextAvailableGroup();
+    if (!await dispatch({ type: "CLEAR_ROUND" })) return false;
+    shareTokens = {};
+    groupPresence = {};
+    scoreSyncStatus.clear();
+    await refreshState().catch(() => {});
+    await loadShareTokens();
+    switchView("setup");
+    showToast(preservation.archived ? "New round ready. The previous round and its complete change history were archived." : "New round ready. Saved players and round history were kept.", "success");
+    return true;
+  }
+
+  async function registerServiceWorker() {
+    if (!("serviceWorker" in navigator) || !location.protocol.startsWith("http")) return;
+    try {
+      serviceWorkerRegistration = await navigator.serviceWorker.register("service-worker.js");
+      if (serviceWorkerRegistration.waiting) $("#updateBanner").hidden = false;
+      serviceWorkerRegistration.addEventListener("updatefound", () => {
+        const worker = serviceWorkerRegistration.installing;
+        worker?.addEventListener("statechange", () => { if (worker.state === "installed" && navigator.serviceWorker.controller) $("#updateBanner").hidden = false; });
+      });
+      let refreshing = false;
+      navigator.serviceWorker.addEventListener("controllerchange", () => { if (!refreshing) { refreshing = true; location.reload(); } });
+    } catch (_) {}
+  }
+
+  document.querySelectorAll(".tab").forEach((tab) => tab.addEventListener("click", () => switchView(tab.dataset.view)));
+  $("#addPlayerBtn").addEventListener("click", () => openPlayerEntry("saved"));
+  $("#addGuestBtn").addEventListener("click", () => openPlayerEntry("guest"));
+  $("#cancelSavedPlayerBtn").addEventListener("click", closePlayerEntry);
+  $("#cancelGuestBtn").addEventListener("click", closePlayerEntry);
+  $("#savedPlayerForm").addEventListener("submit", createSavedPlayer);
+  $("#guestPlayerForm").addEventListener("submit", addGuest);
+  $("#savedPlayerPlus").addEventListener("click", () => togglePlusHandicapInput($("#savedPlayerGhin"), $("#savedPlayerPlus")));
+  $("#guestPlayerPlus").addEventListener("click", () => togglePlusHandicapInput($("#guestPlayerGhin"), $("#guestPlayerPlus")));
+  ["savedPlayerGhin", "savedPlayerTee", "guestPlayerGhin", "guestPlayerTee"].forEach((id) => {
+    $(`#${id}`).addEventListener(id.endsWith("Tee") ? "change" : "input", renderDraftHandicaps);
+  });
+  $("#savedPlayerSearch").addEventListener("input", (event) => { savedPlayerSearch = event.target.value; renderSavedPlayers(); });
+  $("#savedRosterGroup").addEventListener("change", (event) => { savedRosterGroupSelection = event.target.value; renderSavedPlayers(); });
+  $("#addSelectedSavedPlayerBtn").addEventListener("click", () => addSavedPlayerToRound(selectedSavedPlayerId, savedRosterGroupSelection));
+  $("#updateIndexesBtn").addEventListener("click", updateIndexesFromSheet);
+  $("#resetLeaderboardSortBtn").addEventListener("click", () => { leaderboardSort = { key: "standing", direction: "asc" }; renderLeaderboard(); });
+  $("#activeGroupSelect").addEventListener("change", (event) => { clearTimeout(autoAdvanceTimer); groupWasChosen = true; selectedGroup = event.target.value; const url = new URL(location.href); url.searchParams.set("group", selectedGroup); history.replaceState(null, "", url); renderGroupScoring(); });
+  $("#holeSelect").addEventListener("change", (event) => moveToHole(Number(event.target.value)));
+  $("#prevHoleBtn").addEventListener("click", () => moveToHole(selectedHole === 1 ? 18 : selectedHole - 1, { skipMissingCheck: true }));
+  $("#nextHoleBtn").addEventListener("click", () => moveToHole(selectedHole === 18 ? 1 : selectedHole + 1));
+  $("#mobileHoleSelect").addEventListener("change", (event) => moveToHole(Number(event.target.value)));
+  $("#mobilePrevHoleBtn").addEventListener("click", () => moveToHole(selectedHole === 1 ? 18 : selectedHole - 1, { skipMissingCheck: true }));
+  $("#mobileNextHoleBtn").addEventListener("click", () => moveToHole(selectedHole === 18 ? 1 : selectedHole + 1));
+  $("#commentHoleSelect").addEventListener("change", (event) => { selectedCommentHole = Number(event.target.value); renderHoleComments(); renderRoundIdentity(); });
+  $("#advanceHoleBtn").addEventListener("click", () => moveToHole(Math.min(18, selectedHole + 1), { skipMissingCheck: true }));
+  $("#advanceHoleBtnBottom").addEventListener("click", () => moveToHole(Math.min(18, selectedHole + 1), { skipMissingCheck: true }));
+  $("#toggleScorecardBtn").addEventListener("click", () => { scorecardOpen = !scorecardOpen; updateScorecardVisibility(); });
+  $("#hideScorecardBtn").addEventListener("click", () => { scorecardOpen = false; updateScorecardVisibility(); });
+  $("#holeCommentForm").addEventListener("submit", postHoleComment);
+  $("#photoEmailForm").addEventListener("submit", savePhotoEmail);
+  $("#roundName").addEventListener("change", (event) => dispatch({ type: "SET_META", payload: { roundName: event.target.value } }));
+  $("#roundDate").addEventListener("change", (event) => dispatch({ type: "SET_META", payload: { date: event.target.value } }));
+  $("#allowance").addEventListener("change", (event) => dispatch({ type: "SET_ALLOWANCE", payload: { allowance: Number(event.target.value) } }));
+  $("#adminBtn").addEventListener("click", () => {
+    if (currentUser) { const name = currentUser.name; lockAdminControls(); savedPlayerSearch = ""; selectedSavedPlayerId = ""; savedRosterGroupSelection = nextAvailableGroup(); render(); showToast(`${name} signed out.`); }
+    else openAdminDialog();
+  });
+  $("#adminSubmitBtn").addEventListener("click", (event) => { event.preventDefault(); verifyAdmin(); });
+  $("#adminPinInput").addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); verifyAdmin(); } });
+  $("#loginUsernameInput").addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); verifyAdmin(); } });
+  $("#toggleRoundLockBtn").addEventListener("click", () => {
+    if (isLocked()) dispatch({ type: "SET_LOCKED", payload: { locked: false } });
+    else openFinalizeDialog();
+  });
+  const finalizeDialog = $("#finalizeDialog");
+  finalizeDialog.addEventListener("close", async () => {
+    if (finalizeDialog.returnValue === "confirm") await lockAndSaveCurrentRound();
+  });
+  $("#saveRoundBtn").addEventListener("click", async () => {
+    const saved = await saveCurrentRound();
+    if (saved) showToast(`${saved.roundName} saved to round history.`, "success");
+  });
+  $("#downloadSavedRoundBtn").addEventListener("click", () => {
+    if (activeSavedRound) downloadBlob(JSON.stringify(activeSavedRound.state, null, 2), "application/json", `berry-creek-${activeSavedRound.date}-saved.json`);
+  });
+  $("#exportSavedRoundJpegBtn").addEventListener("click", exportSavedRoundJpeg);
+  $("#exportSavedRoundPdfBtn").addEventListener("click", exportSavedRoundPdf);
+  $("#exportAllSavedRoundJpegsBtn").addEventListener("click", exportAllSavedRoundJpegs);
+  $("#exportAllSavedRoundPdfBtn").addEventListener("click", exportAllSavedRoundPdf);
+  $("#soundToggle").addEventListener("change", (event) => { preferences.sound = event.target.checked; savePreferences(); showToast(preferences.sound ? "Celebration sounds on." : "Celebration sounds muted."); });
+  $("#autoAdvanceToggle").addEventListener("change", (event) => { preferences.autoAdvance = event.target.checked; savePreferences(); showToast(preferences.autoAdvance ? "Automatic hole advance is on." : "Automatic hole advance is off."); });
+  $("#displayMode").addEventListener("change", (event) => { preferences.display = event.target.value; savePreferences(); document.body.dataset.display = preferences.display; });
+  $("#completeBackupBtn").addEventListener("click", downloadCompleteBackup);
+  $("#completeRestoreInput").addEventListener("change", async (event) => { const [file] = event.target.files; if (file) await restoreCompleteBackup(file); event.target.value = ""; });
+  $("#createSnapshotBtn").addEventListener("click", createServerSnapshot);
+  $("#refreshReadinessBtn").addEventListener("click", loadReadiness);
+  $("#bootstrapAdminForm").addEventListener("submit", createFirstAdmin);
+  $("#createAdminInviteBtn").addEventListener("click", createAdminInvitation);
+  $("#copyAdminInviteBtn").addEventListener("click", async () => { if (adminInviteLink) { await copyText(adminInviteLink); showToast("Private admin setup link copied.", "success"); } });
+  $("#shareAdminInviteBtn").addEventListener("click", async () => {
+    if (!adminInviteLink) return;
+    if (navigator.share) await navigator.share({ title: "Berry Creek admin setup", text: "Create your private Berry Creek DH Game admin access. This single-use link expires after 24 hours.", url: adminInviteLink }).catch(() => {});
+    else { await copyText(adminInviteLink); showToast("Private admin setup link copied.", "success"); }
+  });
+  $("#acceptAdminInviteForm").addEventListener("submit", acceptAdminInvitation);
+  $("#cancelAdminInviteBtn").addEventListener("click", () => $("#adminInviteDialog").close());
+  $("#copyPlayerInviteBtn").addEventListener("click", async () => { if (playerInviteLink) { await copyText(playerInviteLink); showToast("Private player setup link copied.", "success"); } });
+  $("#sharePlayerInviteBtn").addEventListener("click", async () => {
+    if (!playerInviteLink) return;
+    const name = playerInvitePlayer?.name || "a Berry Creek player";
+    if (navigator.share) await navigator.share({ title: "Berry Creek player login", text: `${name}: create or reset your Berry Creek DH Game access with your assigned username and private PIN. This single-use link expires after 24 hours.`, url: playerInviteLink }).catch(() => {});
+    else { await copyText(playerInviteLink); showToast("Private player setup link copied.", "success"); }
+  });
+  $("#acceptPlayerInviteForm").addEventListener("submit", acceptPlayerInvitation);
+  $("#cancelPlayerInviteBtn").addEventListener("click", () => $("#playerInviteDialog").close());
+  $("#csvBtn").addEventListener("click", downloadCsv);
+  $("#printBtn").addEventListener("click", () => { preparePrintReport(); window.print(); });
+  $("#printSavedRoundBtn").addEventListener("click", () => {
+    if (!activeSavedRound) return;
+    preparePrintReport(activeSavedRound.state);
+    window.print();
+  });
+  const resetDialog = $("#confirmDialog");
+  $("#resetAppBtn").addEventListener("click", () => { resetDialog.returnValue = "cancel"; resetDialog.showModal(); });
+  resetDialog.addEventListener("close", async () => {
+    if (resetDialog.returnValue === "scores") { selectedHole = 1; selectedCommentHole = 1; dispatch({ type: "RESET_SCORES" }); }
+    if (resetDialog.returnValue === "everything") {
+      selectedHole = 1;
+      selectedCommentHole = 1;
+      selectedGroup = "A";
+      if (await dispatch({ type: "CLEAR_ROUND" })) {
+        shareTokens = {};
+        groupPresence = {};
+        await refreshState().catch(() => {});
+        await loadShareTokens();
+      }
+    }
+  });
+  const newRoundDialog = $("#newRoundDialog");
+  $("#startNewRoundBtn").addEventListener("click", async () => {
+    if (!state.players.length || currentRoundIsLockedAndSaved()) return startNewRoundNow();
+    newRoundDialog.returnValue = "cancel";
+    newRoundDialog.showModal();
+  });
+  newRoundDialog.addEventListener("close", async () => {
+    if (newRoundDialog.returnValue !== "confirm") return;
+    await startNewRoundNow();
+  });
+  const reuseRosterDialog = $("#reuseRosterDialog");
+  reuseRosterDialog.addEventListener("close", () => {
+    if (reuseRosterDialog.returnValue === "confirm") startFromSavedRoster();
+    else pendingReuseRound = null;
+  });
+  $("#clearHistoryBtn").addEventListener("click", () => { if (window.confirm("Clear the complete change history?")) dispatch({ type: "CLEAR_AUDIT" }); });
+  $("#footerVersionBtn").addEventListener("click", () => { switchView("tournament"); checkVersion(); });
+  $("#installUpdateBtn").addEventListener("click", () => { if (serviceWorkerRegistration?.waiting) serviceWorkerRegistration.waiting.postMessage({ type: "SKIP_WAITING" }); else location.reload(); });
+  window.addEventListener("online", connect);
+  window.addEventListener("offline", () => setConnection("offline"));
+  document.addEventListener("visibilitychange", updateLeaderboardWakeLock);
+  window.addEventListener("orientationchange", updateLeaderboardWakeLock);
+  window.addEventListener("resize", updateLeaderboardWakeLock);
+  window.addEventListener("scroll", scheduleHeaderLayout, { passive: true });
+  window.addEventListener("orientationchange", settleHeaderAfterOrientationChange);
+  if (typeof MOBILE_HEADER_MEDIA.addEventListener === "function") MOBILE_HEADER_MEDIA.addEventListener("change", scheduleHeaderLayout);
+  window.addEventListener("pagehide", releaseLeaderboardWakeLock);
+
+  if (typeof ResizeObserver === "function") new ResizeObserver(scheduleHeaderHeight).observe($(".app-header"));
+
+  document.body.dataset.display = preferences.display;
+  setupScrollAffordances();
+  scheduleHeaderLayout();
+  $("#appVersion").textContent = `Version ${APP_VERSION}`;
+  $("#footerVersionBtn").textContent = `App v${APP_VERSION}`;
   render();
-  initMap();
-  if('serviceWorker' in navigator && window.isSecureContext){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));}
+  openAdminInvitation();
+  openPlayerInvitation();
+  const initialView = spectatorMode ? "leaderboard" : params.get("view") || "score";
+  if (["setup", "score", "comments", "leaderboard", "tournament"].includes(initialView)) switchView(initialView);
+  connect();
+  registerServiceWorker();
+  checkVersion();
 })();
